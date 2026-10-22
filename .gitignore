@@ -1,0 +1,30 @@
+# Build output
+/build/
+/out/
+/cmake-build-*/
+/vcpkg_installed/
+/CMakeUserPresets.json
+compile_commands.json
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs / runtime artifacts
+*.log
+ldns.db
+ldns.db-*
+
+# Fuzzing artifacts written to the repo root by libFuzzer.
+# tests/fuzz/corpus/*.bin is intentionally committed.
+/crash-*
+/leak-*
+/timeout-*
+/oom-*

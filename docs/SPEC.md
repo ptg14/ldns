@@ -271,7 +271,7 @@ Chuyển `offline` → xóa khỏi bỏ phiếu bước 2d (chỉ còn dùng ở
 - Không giới hạn số domain. Tên trùng tên mình đã có → báo "đã tồn tại, dùng `/set`".
 - Mặc định đích `self`. Có thể đặt: IPv4/IPv6 tường minh, hoặc `CNAME` tới tên khác, hoặc `TXT`.
 - Nhiều giá trị cho một tên (round-robin): `/add app.lan 10.0.0.5 10.0.0.6`.
-- Wildcard: `/add *.app.lan` phủ mọi nhãn con chưa có bản ghi riêng.
+- Wildcard: `/add *.app.lan` phủ mọi nhãn con chưa có bản ghi riêng, ở mọi độ sâu phía dưới (RFC 1034 §4.3.2); bản ghi cụ thể luôn thắng wildcard, wildcard cụ thể hơn (gần tên hơn) thắng wildcard tổng quát hơn.
 - Chính sách TLD (D15): tên có đuôi trùng danh sách TLD công cộng nhúng sẵn (com, net, org, vn, io, dev…) → hộp thoại xác nhận (hoặc cờ `--force`). `.local` bị cảnh báo vì xung đột mDNS.
 - Nhập/xuất hàng loạt: `/import file.toml|csv`, `/export`.
 

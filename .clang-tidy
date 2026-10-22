@@ -1,0 +1,16 @@
+Checks: >
+  -*,
+  bugprone-*,
+  performance-*,
+  modernize-*,
+  readability-*,
+  -modernize-use-trailing-return-type,
+  -readability-identifier-length,
+  -readability-magic-numbers,
+  -readability-function-cognitive-complexity,
+  -bugprone-easily-swappable-parameters,
+  -modernize-avoid-c-arrays,
+  -performance-avoid-endl
+WarningsAsErrors: ''
+HeaderFilterRegex: '^.*/src/.*\.(hpp|h)$'
+FormatStyle: file
