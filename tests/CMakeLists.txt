@@ -9,6 +9,8 @@ add_executable(ldns_tests
     test_message.cpp
     test_local_zone.cpp
     test_acl.cpp
+    test_query_handler.cpp
+    test_dns_server.cpp
 )
 target_link_libraries(ldns_tests PRIVATE ldns_core doctest::doctest)
 ldns_set_warnings(ldns_tests)

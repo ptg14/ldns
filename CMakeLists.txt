@@ -45,6 +45,12 @@ endif()
 find_package(spdlog CONFIG REQUIRED)
 find_package(CLI11 CONFIG REQUIRED)
 find_package(doctest CONFIG REQUIRED)
+find_package(asio CONFIG REQUIRED)
+
+# Asio is header-only; ASIO_NO_DEPRECATED keeps us on the modern API.
+add_library(ldns_asio INTERFACE)
+target_link_libraries(ldns_asio INTERFACE asio::asio)
+target_compile_definitions(ldns_asio INTERFACE ASIO_NO_DEPRECATED ASIO_STANDALONE)
 
 # ---------------------------------------------------------------------------
 # Core library (UI-agnostic). Grows milestone by milestone per docs/PLAN.md.
@@ -54,13 +60,15 @@ add_library(ldns_core STATIC
     src/core/dns/message.cpp
     src/core/dns/local_zone.cpp
     src/core/server/acl.cpp
+    src/core/server/query_handler.cpp
+    src/core/server/dns_server.cpp
     src/core/util/logger.cpp
     src/core/util/id.cpp
     src/core/util/hlc.cpp
     src/core/version.cpp
 )
 target_include_directories(ldns_core PUBLIC src)
-target_link_libraries(ldns_core PUBLIC spdlog::spdlog)
+target_link_libraries(ldns_core PUBLIC spdlog::spdlog ldns_asio)
 target_compile_definitions(ldns_core PUBLIC LDNS_VERSION="${PROJECT_VERSION}")
 ldns_set_warnings(ldns_core)
 

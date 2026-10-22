@@ -164,16 +164,39 @@ void RateLimiter::set_limits(std::uint32_t qps, std::uint32_t burst) {
     burst_ = burst == 0 ? qps_ : burst;
 }
 
+void RateLimiter::prune_locked(std::int64_t now_ns) {
+    for (auto it = buckets_.begin(); it != buckets_.end();) {
+        const double elapsed = static_cast<double>(now_ns - it->second.last_ns) / 1e9;
+        if (elapsed < 0 || it->second.tokens + elapsed * qps_ >= burst_) {
+            it = buckets_.erase(it);  // full again: no state worth keeping
+        } else {
+            ++it;
+        }
+    }
+}
+
 bool RateLimiter::allow(const IpAddress& source, std::int64_t now_ns) {
     const std::string key = key_of(source);
     std::lock_guard lock(mutex_);
 
-    auto& bucket = buckets_[key];
+    auto it = buckets_.find(key);
+    if (it == buckets_.end()) {
+        // Pruning is O(n), so it runs at most once per 1024 new sources. At
+        // the hard cap, new sources are refused until a prune frees space.
+        if (++inserts_since_prune_ >= 1024) {
+            prune_locked(now_ns);
+            inserts_since_prune_ = 0;
+        }
+        if (buckets_.size() >= kMaxTrackedSources) return false;
+        it = buckets_.emplace(key, Bucket{}).first;
+    }
+    auto& bucket = it->second;
     if (!bucket.initialized) {
         bucket.tokens = burst_;
         bucket.last_ns = now_ns;
         bucket.initialized = true;
     }
+    if (now_ns < bucket.last_ns) bucket.last_ns = now_ns;  // clock went backwards
 
     if (now_ns > bucket.last_ns) {
         const double elapsed_seconds = static_cast<double>(now_ns - bucket.last_ns) / 1e9;
@@ -189,6 +212,7 @@ bool RateLimiter::allow(const IpAddress& source, std::int64_t now_ns) {
 void RateLimiter::clear() {
     std::lock_guard lock(mutex_);
     buckets_.clear();
+    inserts_since_prune_ = 0;
 }
 
 std::size_t RateLimiter::tracked_sources() const {

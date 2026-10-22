@@ -109,6 +109,48 @@ TEST_CASE("a first query at t=0 still gets a full burst") {
     CHECK_FALSE(limiter.allow(source, 0));
 }
 
+TEST_CASE("rate limiter memory is bounded under a source flood") {
+    RateLimiter limiter(1, 1);  // tight limits so buckets stay "used"
+    const std::int64_t now = 1'000'000'000;
+    for (std::uint32_t i = 0; i < 200000; ++i) {
+        IpAddress source;
+        source.bytes[0] = static_cast<std::uint8_t>(i >> 24);
+        source.bytes[1] = static_cast<std::uint8_t>(i >> 16);
+        source.bytes[2] = static_cast<std::uint8_t>(i >> 8);
+        source.bytes[3] = static_cast<std::uint8_t>(i);
+        (void)limiter.allow(source, now);
+    }
+    CHECK(limiter.tracked_sources() <= 16384);
+}
+
+TEST_CASE("rate limiter prunes idle buckets once they refill") {
+    RateLimiter limiter(100, 10);
+    const std::int64_t now = 5'000'000'000;
+    for (int i = 0; i < 1000; ++i) {
+        IpAddress source;
+        source.bytes[0] = 10;
+        source.bytes[1] = static_cast<std::uint8_t>(i >> 8);
+        source.bytes[2] = static_cast<std::uint8_t>(i);
+        (void)limiter.allow(source, now);
+        (void)limiter.allow(source, now);  // drain below full
+    }
+    CHECK(limiter.tracked_sources() == 1000);
+
+    // A long time later every bucket is full again. Pruning runs every 1024
+    // new sources, so insert that many distinct new sources and check the map
+    // stayed bounded instead of growing by 1024.
+    const std::int64_t later = now + 60'000'000'000;
+    for (int i = 0; i < 1024; ++i) {
+        IpAddress source;
+        source.bytes[0] = 172;
+        source.bytes[1] = 16;
+        source.bytes[2] = static_cast<std::uint8_t>(i >> 8);
+        source.bytes[3] = static_cast<std::uint8_t>(i);
+        (void)limiter.allow(source, later);
+    }
+    CHECK(limiter.tracked_sources() <= 1024 + 1);
+}
+
 TEST_CASE("rate limiter buckets are per source") {
     RateLimiter limiter(100, 2);
     const std::int64_t now = 5'000'000'000;

@@ -79,16 +79,27 @@ public:
     std::size_t tracked_sources() const;
 
 private:
+    // Hard cap on tracked sources; when reached, buckets that have fully
+    // refilled are dropped, and if none are, new sources are treated as
+    // over-limit until space frees up. Prevents unbounded memory growth from
+    // spoofed sources (SPEC §14).
+    static constexpr std::size_t kMaxTrackedSources = 16384;
+
     struct Bucket {
         double tokens{};
         std::int64_t last_ns{};
         bool initialized{false};
     };
 
+    // Removes buckets that would be full again (nothing to remember).
+    void prune_locked(std::int64_t now_ns);
+
     std::uint32_t qps_;
     std::uint32_t burst_;
     mutable std::mutex mutex_;
     std::unordered_map<std::string, Bucket> buckets_;
+    // Number of new sources since the last prune; bounds prune cost.
+    std::size_t inserts_since_prune_{0};
 };
 
 }  // namespace ldns

@@ -11,7 +11,23 @@
 ## 2. Commit
 
 - **Không tự ý commit hay push.** Không bao giờ chạy `git commit`, `git push`, `git reset --hard`… khi chưa được yêu cầu.
+- **Trước khi đề xuất commit, bắt buộc phải test và review code** (xem §2.1). Không đề xuất commit dựa trên code chưa được kiểm chứng.
 - Khi công việc đã sẵn sàng commit: liệt kê file thay đổi + **viết sẵn commit message** đề xuất, rồi để **người dùng quyết định** có commit hay không.
+
+### 2.1 Test và review bắt buộc trước khi đề xuất commit
+
+1. **Build + test thật trên cả hai nền tảng**, không chỉ một máy:
+   - Windows: `cmake --preset local-windows-msvc-debug` → build → `ctest --preset local-windows-msvc-debug`.
+   - Linux (WSL): `scripts/wsl-build.sh test linux-debug` và `scripts/wsl-build.sh test linux-asan`.
+   - Nếu thay đổi chạm parser nhận dữ liệu từ mạng: chạy thêm `scripts/wsl-fuzz.sh` cho harness liên quan.
+   - Build/test phải **xanh**; nếu đỏ thì sửa trước, không đề xuất commit kèm lỗi đã biết (trừ khi người dùng yêu cầu rõ).
+2. **Review code** phần thay đổi (tự review hoặc dùng quy trình review của repo):
+   - đúng SPEC/PLAN/protocol;
+   - lỗi biên, tràn, vòng đời/ownership, đa luồng, tài nguyên;
+   - bảo mật theo §4 (validate đầu vào mạng, không lộ bí mật, giới hạn kích thước);
+   - test bao phủ hành vi mới và **mỗi bug sửa được kèm test tái hiện**.
+3. Ghi kết quả test/review (nền tảng nào, pass/fail, bug đã sửa) vào `process.md` **trước** khi đưa ra commit message đề xuất.
+4. Commit message đề xuất chỉ được đưa ra sau khi hoàn tất 1–3.
 - Chỉ commit đúng phạm vi thay đổi của nhiệm vụ; không gộp thay đổi ngoài lề.
 
 ## 3. Kiểm tra ảnh hưởng khi viết code
