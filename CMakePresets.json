@@ -34,6 +34,18 @@
       }
     },
     {
+      "name": "windows-ci",
+      "displayName": "Windows CI (Ninja + MSVC, static)",
+      "description": "Generator-version agnostic: uses whichever MSVC environment is active. Run from a Developer prompt, or via msvc-dev-cmd in CI.",
+      "inherits": "base",
+      "generator": "Ninja",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "VCPKG_TARGET_TRIPLET": "x64-windows-static",
+        "LDNS_BUILD_TESTS": "ON"
+      }
+    },
+    {
       "name": "linux-debug",
       "displayName": "Linux Debug",
       "inherits": "base",
@@ -71,6 +83,7 @@
   "buildPresets": [
     { "name": "windows-msvc-debug", "configurePreset": "windows-msvc-debug", "configuration": "Debug" },
     { "name": "windows-msvc-release", "configurePreset": "windows-msvc-release", "configuration": "Release" },
+    { "name": "windows-ci", "configurePreset": "windows-ci" },
     { "name": "linux-debug", "configurePreset": "linux-debug" },
     { "name": "linux-release", "configurePreset": "linux-release" },
     { "name": "linux-asan", "configurePreset": "linux-asan" }
@@ -78,6 +91,7 @@
   "testPresets": [
     { "name": "windows-msvc-debug", "configurePreset": "windows-msvc-debug", "configuration": "Debug", "output": { "outputOnFailure": true } },
     { "name": "windows-msvc-release", "configurePreset": "windows-msvc-release", "configuration": "Release", "output": { "outputOnFailure": true } },
+    { "name": "windows-ci", "configurePreset": "windows-ci", "output": { "outputOnFailure": true } },
     { "name": "linux-debug", "configurePreset": "linux-debug", "output": { "outputOnFailure": true } },
     { "name": "linux-release", "configurePreset": "linux-release", "output": { "outputOnFailure": true } },
     { "name": "linux-asan", "configurePreset": "linux-asan", "output": { "outputOnFailure": true } }
