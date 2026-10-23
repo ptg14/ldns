@@ -11,8 +11,9 @@ add_executable(ldns_tests
     test_acl.cpp
     test_query_handler.cpp
     test_dns_server.cpp
+    test_ui.cpp
 )
-target_link_libraries(ldns_tests PRIVATE ldns_core doctest::doctest)
+target_link_libraries(ldns_tests PRIVATE ldns_core ldns_ui doctest::doctest)
 ldns_set_warnings(ldns_tests)
 
 add_test(NAME ldns_tests COMMAND ldns_tests)

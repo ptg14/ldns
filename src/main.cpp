@@ -5,6 +5,7 @@
 
 #include "core/util/logger.hpp"
 #include "core/version.hpp"
+#include "ui/tui_app.hpp"
 
 namespace {
 
@@ -16,7 +17,18 @@ constexpr int kExitUsage = 2;
 
 }  // namespace
 
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#endif
+
 int main(int argc, char** argv) {
+#if defined(_WIN32)
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+#endif
+
     CLI::App app{"Ldns — peer-to-peer local DNS for LAN", "ldns"};
     app.set_version_flag("--version", ldns::version_string() + " (protocol " +
                                          std::to_string(ldns::kProtocolMajor) + "." +
@@ -27,6 +39,9 @@ int main(int argc, char** argv) {
         ->check(CLI::IsMember({"trace", "debug", "info", "warn", "warning", "error", "off"}))
         ->default_val("info");
 
+    bool headless = false;
+    app.add_flag("--headless", headless, "Run in headless mode without TUI");
+
     try {
         app.parse(argc, argv);
     } catch (const CLI::ParseError& e) {
@@ -36,6 +51,13 @@ int main(int argc, char** argv) {
     }
 
     ldns::init_logger(log_level);
-    ldns::logger()->info("ldns {} — M0 skeleton", ldns::version_string());
-    return kExitOk;
+
+    if (headless) {
+        ldns::logger()->info("ldns {} - running headless", ldns::version_string());
+        return kExitOk;
+    }
+
+    // Launch interactive Claude Code style TUI
+    ldns::ui::TuiApp tui;
+    return tui.run();
 }

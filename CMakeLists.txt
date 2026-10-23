@@ -73,10 +73,30 @@ target_compile_definitions(ldns_core PUBLIC LDNS_VERSION="${PROJECT_VERSION}")
 ldns_set_warnings(ldns_core)
 
 # ---------------------------------------------------------------------------
+# UI library (Claude Code style inline TUI & terminal widgets)
+# ---------------------------------------------------------------------------
+add_library(ldns_ui STATIC
+    src/ui/term/terminal.cpp
+    src/ui/widgets/welcome_panel.cpp
+    src/ui/widgets/slash_menu.cpp
+    src/ui/widgets/dialog.cpp
+    src/ui/widgets/spinner.cpp
+    src/ui/widgets/status_line.cpp
+    src/ui/widgets/input_box.cpp
+    src/ui/widgets/trace_view.cpp
+    src/ui/widgets/doctor_view.cpp
+    src/ui/inline_renderer.cpp
+    src/ui/tui_app.cpp
+)
+target_include_directories(ldns_ui PUBLIC src)
+target_link_libraries(ldns_ui PUBLIC ldns_core)
+ldns_set_warnings(ldns_ui)
+
+# ---------------------------------------------------------------------------
 # Executable
 # ---------------------------------------------------------------------------
 add_executable(ldns src/main.cpp)
-target_link_libraries(ldns PRIVATE ldns_core CLI11::CLI11)
+target_link_libraries(ldns PRIVATE ldns_core ldns_ui CLI11::CLI11)
 ldns_set_warnings(ldns)
 
 # ---------------------------------------------------------------------------
