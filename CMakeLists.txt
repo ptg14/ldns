@@ -85,6 +85,12 @@ add_library(ldns_ui STATIC
     src/ui/widgets/input_box.cpp
     src/ui/widgets/trace_view.cpp
     src/ui/widgets/doctor_view.cpp
+    src/ui/widgets/conflict_view.cpp
+    src/ui/widgets/info_view.cpp
+    src/ui/widgets/log_view.cpp
+    src/ui/widgets/peers_view.cpp
+    src/ui/widgets/upstream_view.cpp
+    src/ui/widgets/network_view.cpp
     src/ui/inline_renderer.cpp
     src/ui/tui_app.cpp
 )

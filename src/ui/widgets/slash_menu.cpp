@@ -22,6 +22,7 @@ SlashMenu::SlashMenu() {
         {"/conflicts", "/conflicts", "Xem các tên miền đang bị xung đột phiếu"},
         {"/logs", "/logs [--follow]", "Xem nhật ký truy vấn DNS thời gian thực"},
         {"/status", "/status", "Tổng quan bind, quyền, peer, an toàn mạng"},
+        {"/service", "/service status|install|start|stop", "Quản lý dịch vụ daemon nền hệ thống"},
         {"/network", "/network [name|key]", "Cấu hình tên mạng và khóa PSK"},
         {"/system", "/system setup|restore", "Đặt hoặc khôi phục DNS hệ thống"},
         {"/doctor", "/doctor", "Chẩn đoán cổng 53, firewall, quyền, multicast"},
@@ -71,8 +72,7 @@ std::vector<std::string> SlashMenu::render(size_t term_width) const {
         return {};
     }
 
-    size_t box_width = std::min<size_t>(term_width, 70);
-    if (box_width < 45) box_width = term_width;
+    size_t box_width = (term_width < 20) ? 20 : term_width;
 
     std::vector<std::string> lines;
     // Show maximum 7 items at a time

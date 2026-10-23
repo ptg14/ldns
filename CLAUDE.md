@@ -69,6 +69,6 @@
 
 1. **Phạm vi chuyên biệt:** Chỉ tập trung vào thiết kế và triển khai UX/UI (inline TUI, widgets, tương tác terminal, hiển thị bảng màu, phím tắt). **Không can thiệp quá sâu vào logic vận hành core** (DNS server, SQLite store, resolver pipeline, giao thức đồng bộ peer).
 2. **Nhánh làm việc riêng:** Mọi công việc về giao diện phải được thực hiện trên nhánh riêng về UI (ví dụ: `feat/ux-ui`), không làm trực tiếp trên nhánh `main`.
-3. **Quy trình báo cáo kèm danh mục Test (User là Tester):** Mỗi khi báo cáo kết quả phải đi kèm **checklist kiểm thử UX/UI chi tiết** (duy trì tại `UI_CHECKLIST.md` và `docs/UI-SPEC.md`) để người dùng trực tiếp tự kiểm thử trong vai trò tester.
+3. **Quy trình báo cáo kèm danh mục Test (User là Tester):** Mỗi khi báo cáo kết quả phải đi kèm **checklist kiểm thử UX/UI chi tiết** (duy trì tại `docs/UI_CHECKLIST.md` và `docs/UI-SPEC.md`) để người dùng trực tiếp tự kiểm thử trong vai trò tester.
 4. **Nhật ký phân hệ UI tách biệt:** Toàn bộ lịch sử tiến độ, phân tích lỗi giao diện và cập nhật khắc phục của phân hệ UI được ghi vào `process-ui.md`, không ghi vào `process.md`.
-5. **Theo dõi lỗi giao diện:** Các lỗi phát hiện trong quá trình test UX/UI phải được ghi nhận và theo dõi trạng thái cụ thể trong bảng Bug Tracker của `UI_CHECKLIST.md`.
+5. **Theo dõi lỗi giao diện:** Các lỗi phát hiện trong quá trình test UX/UI phải được ghi nhận và theo dõi trạng thái cụ thể trong bảng Bug Tracker của `docs/UI_CHECKLIST.md`.

@@ -1,6 +1,7 @@
 #include "ui/tui_app.hpp"
 
 #include <chrono>
+#include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <thread>
@@ -16,12 +17,43 @@ namespace ldns::ui {
 TuiApp::TuiApp() : term_(Terminal::instance()), renderer_(term_) {
     stats_.peer_count = 3;
     stats_.domain_count = 14;
-    stats_.conflict_count = 0;
+    stats_.conflict_count = 1;
     stats_.online = true;
 
     my_domains_ = {
         {"app.lan", "192.168.1.10 (self)"},
-        {"db.lan", "192.168.1.10 (self)"}
+        {"db.lan", "192.168.1.10 (self)"},
+        {"web.lan", "192.168.1.10 (self)"}
+    };
+
+    my_peers_ = {
+        {"minh-laptop", "192.168.1.22:5391", "2.1 ms", 8, "v0.1.0", true},
+        {"nam-desktop", "192.168.1.45:5391", "1.4 ms", 15, "v0.1.0", true},
+        {"pi-server", "192.168.1.100:5391", "0.9 ms", 3, "v0.1.0", true}
+    };
+
+    my_upstreams_ = {
+        {"1.1.1.1:53", "Cloudflare", "14 ms", 1, true},
+        {"8.8.8.8:53", "Google", "18 ms", 2, true},
+        {"9.9.9.9:53", "Quad9", "22 ms", 3, true}
+    };
+
+    network_info_.network_name = "default";
+    network_info_.discovery_endpoint = "239.76.68.83:5390 (UDP Multicast)";
+    network_info_.sync_port = "5391 (TCP Full-mesh)";
+    network_info_.psk_enabled = false;
+    network_info_.active_peers = 3;
+
+    ConflictVoteGroup g1{1, 2, "192.168.1.10", {"thang-pc (bạn)", "nam-desktop"}, true};
+    ConflictVoteGroup g2{2, 1, "192.168.1.22", {"minh-laptop"}, false};
+    mock_conflicts_.push_back({"web.lan", "A", {g1, g2}, "Dùng \"/info web.lan\" để xem thời điểm claim hoặc đổi tên miền."});
+
+    mock_logs_ = {
+        {"14:02:11.104", "127.0.0.1", "A", "app.lan", "[L:Local]", "NOERROR", "180 µs"},
+        {"14:02:12.350", "192.168.1.50", "A", "api.lan", "[P:Peer]", "NOERROR", "2.4 ms"},
+        {"14:02:15.891", "127.0.0.1", "AAAA", "google.com", "[U:Upstream]", "NOERROR", "16.1 ms"},
+        {"14:02:18.012", "192.168.1.22", "A", "test.invalid", "[U:Upstream]", "NXDOMAIN", "12.0 ms"},
+        {"14:02:20.405", "127.0.0.1", "A", "db.lan", "[L:Local]", "NOERROR", "120 µs"}
     };
 
     welcome_info_.node_name = "thang-pc";
@@ -149,6 +181,45 @@ void TuiApp::render_all(bool full_screen_refresh) {
     renderer_.render_dynamic_zone(dynamic_lines, cursor_line_offset, cursor_col);
 }
 
+void TuiApp::handle_logs_follow() {
+    renderer_.clear_dynamic_zone();
+
+    add_scrollback(Style::primary(Style::glyph_bullet()) + "  " +
+                   Style::bold("Đang theo dõi nhật ký truy vấn DNS theo thời gian thực") +
+                   Style::dim(" (Ấn Esc hoặc q để dừng)"));
+
+    std::string header = "  " + Style::dim("Thời gian      Client IP        Loại   Tên domain             Phân giải      Kết quả    Độ trễ");
+    add_scrollback(header);
+    add_scrollback(Style::dim("  ────────────────────────────────────────────────────────────────────────────────────────────"));
+
+    std::vector<QueryLogEntry> live_feed = {
+        {"14:05:01.120", "127.0.0.1", "A", "app.lan", "[L:Local]", "NOERROR", "195 µs"},
+        {"14:05:02.440", "192.168.1.45", "A", "db.lan", "[L:Local]", "NOERROR", "210 µs"},
+        {"14:05:03.900", "127.0.0.1", "A", "api.lan", "[P:Peer]", "NOERROR", "2.1 ms"},
+        {"14:05:05.150", "192.168.1.22", "A", "google.com", "[U:Upstream]", "NOERROR", "15.4 ms"},
+        {"14:05:06.880", "127.0.0.1", "AAAA", "github.com", "[U:Upstream]", "NOERROR", "17.2 ms"},
+        {"14:05:08.010", "192.168.1.100", "A", "internal.lan", "[L:Local]", "NXDOMAIN", "90 µs"},
+        {"14:05:09.620", "127.0.0.1", "A", "web.lan", "[P:Peer]", "NOERROR", "1.8 ms"}
+    };
+
+    size_t feed_idx = 0;
+    while (feed_idx < live_feed.size()) {
+        if (term_.has_byte_pending(600)) {
+            TerminalSize last_sz = term_.size();
+            InputEvent ev = InputParser::read_next_event(term_, &last_sz);
+            if (ev.type == KeyType::Esc || (ev.type == KeyType::Character && (ev.text == "q" || ev.text == "Q"))) {
+                break;
+            }
+        }
+
+        const auto& entry = live_feed[feed_idx++];
+        add_scrollback(LogView::format_entry(entry));
+        mock_logs_.push_back(entry);
+    }
+
+    add_scrollback(Style::dim("⏺  Đã dừng theo dõi nhật ký truy vấn DNS."));
+}
+
 int TuiApp::run() {
     term_.enable_raw_mode();
 
@@ -257,12 +328,28 @@ int TuiApp::run() {
                 slash_menu_.move_selection_down();
                 render_all();
                 continue;
-            } else if (ev.type == KeyType::Tab || ev.type == KeyType::Enter) {
+            } else if (ev.type == KeyType::Tab) {
                 const auto* cmd = slash_menu_.selected_command();
                 if (cmd) {
                     input_box_.set_text(cmd->name + " ");
                 }
                 show_slash_menu_ = false;
+                render_all();
+                continue;
+            } else if (ev.type == KeyType::Enter) {
+                const auto* cmd = slash_menu_.selected_command();
+                std::string chosen_cmd;
+                if (cmd && !input_box_.text().empty() && input_box_.text().find(' ') == std::string::npos) {
+                    chosen_cmd = cmd->name;
+                } else {
+                    chosen_cmd = input_box_.text();
+                }
+                show_slash_menu_ = false;
+                input_box_.add_to_history(chosen_cmd);
+                input_box_.clear();
+                if (!chosen_cmd.empty()) {
+                    handle_command(chosen_cmd);
+                }
                 render_all();
                 continue;
             } else if (ev.type == KeyType::Esc) {
@@ -280,7 +367,7 @@ int TuiApp::run() {
                     break;
                 }
                 const std::string& cur_text = input_box_.text();
-                if (!cur_text.empty() && cur_text[0] == '/') {
+                if (!cur_text.empty() && cur_text[0] == '/' && cur_text.find(' ') == std::string::npos) {
                     show_slash_menu_ = true;
                     slash_menu_.set_query(cur_text);
                 } else {
@@ -288,17 +375,20 @@ int TuiApp::run() {
                 }
                 break;
             }
-            case KeyType::Backspace:
+            case KeyType::Backspace: {
                 input_box_.backspace();
                 if (input_box_.is_search_mode()) {
                     break;
                 }
-                if (input_box_.text().empty() || input_box_.text()[0] != '/') {
-                    show_slash_menu_ = false;
+                const std::string& cur_text = input_box_.text();
+                if (!cur_text.empty() && cur_text[0] == '/' && cur_text.find(' ') == std::string::npos) {
+                    show_slash_menu_ = true;
+                    slash_menu_.set_query(cur_text);
                 } else {
-                    slash_menu_.set_query(input_box_.text());
+                    show_slash_menu_ = false;
                 }
                 break;
+            }
             case KeyType::Delete:
                 input_box_.delete_char();
                 break;
@@ -326,6 +416,9 @@ int TuiApp::run() {
             case KeyType::Tab:
                 if (input_box_.is_search_mode()) {
                     input_box_.accept_search();
+                } else if (!input_box_.text().empty() && input_box_.text()[0] == '/' && input_box_.text().find(' ') == std::string::npos) {
+                    show_slash_menu_ = true;
+                    slash_menu_.set_query(input_box_.text());
                 }
                 break;
             case KeyType::Esc:
@@ -403,17 +496,39 @@ void TuiApp::handle_command(const std::string& cmd_line) {
     if (cmd == "/help" || cmd == "help") {
         std::vector<std::string> lines;
         lines.push_back(Style::primary("Các lệnh Ldns thông dụng:"));
-        lines.push_back("  " + Style::bold("/add <tên> [đích]") + "        Tạo domain (mặc định IP self)");
-        lines.push_back("  " + Style::bold("/ls") + "                       Liệt kê toàn bộ domain mạng LAN");
-        lines.push_back("  " + Style::bold("/rm <tên>") + "                 Xóa domain");
-        lines.push_back("  " + Style::bold("/info <tên>") + "               Chi tiết số phiếu và thứ hạng");
-        lines.push_back("  " + Style::bold("/resolve <tên> [--trace]") + "   Phân giải thử nghiệm kèm sơ đồ cây");
-        lines.push_back("  " + Style::bold("/peers") + "                    Xem danh sách các máy peer");
-        lines.push_back("  " + Style::bold("/conflicts") + "                Xem các tên miền bị tranh chấp");
-        lines.push_back("  " + Style::bold("/doctor") + "                   Chẩn đoán sức khỏe hệ thống");
-        lines.push_back("  " + Style::bold("/status") + "                   Tổng quan hệ thống và bảo mật");
-        lines.push_back("  " + Style::bold("/system setup|restore") + "     Cấu hình hoặc hoàn tác DNS HĐH");
+        lines.push_back("  " + Style::bold("/add <tên> [đích]") + "        Tạo domain mới (mặc định IP self)");
+        lines.push_back("  " + Style::bold("/set <tên> <đích>") + "        Thay đổi địa chỉ IP đích của domain");
+        lines.push_back("  " + Style::bold("/rm <tên>") + "                 Xóa domain khỏi máy này");
+        lines.push_back("  " + Style::bold("/ls") + "                       Liệt kê các domain trong mạng LAN");
+        lines.push_back("  " + Style::bold("/info <tên>") + "               Xem chi tiết sở hữu, số phiếu và thứ hạng");
+        lines.push_back("  " + Style::bold("/resolve <tên> [--trace]") + "   Phân giải domain với sơ đồ cây 3 bước");
+        lines.push_back("  " + Style::bold("/peers") + "                    Xem danh sách các máy peer trong LAN");
+        lines.push_back("  " + Style::bold("/peer add|rm <ip:cổng>") + "    Thêm hoặc ngắt kết nối peer thủ công");
+        lines.push_back("  " + Style::bold("/upstream [list|add|rm]") + "   Xem và quản lý DNS server upstream");
+        lines.push_back("  " + Style::bold("/conflicts") + "                Trực quan hóa các tên miền đang tranh chấp");
+        lines.push_back("  " + Style::bold("/logs [--follow]") + "          Xem nhật ký truy vấn DNS trực tiếp");
+        lines.push_back("  " + Style::bold("/network [name|key]") + "       Cấu hình tên cụm mạng và khóa mã hóa PSK");
+        lines.push_back("  " + Style::bold("/doctor") + "                   Chẩn đoán sức khỏe hệ thống toàn diện");
+        lines.push_back("  " + Style::bold("/status") + "                   Tổng quan hệ thống, dịch vụ và an toàn");
+        lines.push_back("  " + Style::bold("/system setup|restore") + "     Cấu hình hoặc hoàn tác DNS hệ điều hành");
+        lines.push_back("  " + Style::bold("/service status|install") + "   Quản lý dịch vụ nền daemon của hệ thống");
+        lines.push_back("  " + Style::bold("/version") + "                  Xem phiên bản và môi trường build");
         lines.push_back("  " + Style::bold("/exit") + "                     Thoát khỏi chương trình");
+        add_scrollback(lines);
+        return;
+    }
+
+    if (cmd == "/version" || cmd == "version") {
+        std::vector<std::string> lines;
+        lines.push_back(Style::primary(Style::glyph_bullet()) + "  " + Style::bold("Ldns — Local Peer-to-Peer DNS for LAN"));
+        lines.push_back(Style::glyph_indent() + "  Phiên bản: 0.1.0-alpha (nhánh feat/ux-ui)");
+        lines.push_back(Style::glyph_indent() + "  Tiêu chuẩn: C++20 · Giao thức: RFC 1035 + Ldns Peer Protocol v0.1");
+#if defined(_WIN32)
+        lines.push_back(Style::glyph_indent() + "  Nền tảng: Windows x64 (MSVC 2022 / Windows Terminal VT)");
+#else
+        lines.push_back(Style::glyph_indent() + "  Nền tảng: Linux x64 (POSIX raw / systemd-resolved compatible)");
+#endif
+        lines.push_back(Style::glyph_indent() + "  Trạng thái: Milestone M1 hoàn thành · UI/UX inline renderer sẵn sàng");
         add_scrollback(lines);
         return;
     }
@@ -422,16 +537,21 @@ void TuiApp::handle_command(const std::string& cmd_line) {
         std::vector<std::string> lines;
         lines.push_back(Style::primary(Style::glyph_bullet()) + "  " + Style::bold("Tổng quan Ldns") + " (node: thang-pc · a3f9e1)");
         lines.push_back(Style::glyph_indent() + "  Phiên bản: 0.1.0 · Cổng discovery: 5390 · Cổng sync: 5391");
-        lines.push_back(Style::glyph_indent() + "  " + Style::warning("Cảnh báo: Chưa đặt khóa mạng PSK (/network key set để bật mã hóa)"));
+        if (!network_info_.psk_enabled) {
+            lines.push_back(Style::glyph_indent() + "  " + Style::warning("Cảnh báo: Chưa đặt khóa mạng PSK (/network key set để bật mã hóa)"));
+        } else {
+            lines.push_back(Style::glyph_indent() + "  " + Style::success("Bảo mật: Mạng được bảo vệ bởi khóa PSK (" + network_info_.psk_cipher + ")"));
+        }
         lines.push_back("");
         lines.push_back("  " + Style::bold("Dịch vụ DNS:"));
         lines.push_back("    " + Style::success(Style::glyph_dot()) + "  127.0.0.1:53       Hoạt động (4,821 truy vấn · avg 0.8ms)");
         lines.push_back("    " + Style::success(Style::glyph_dot()) + "  192.168.1.10:53    Hoạt động (LAN interface: Wi-Fi)");
         lines.push_back("");
-        lines.push_back("  " + Style::bold("Kết nối Peer (" + std::to_string(stats_.peer_count) + " peer online):"));
-        lines.push_back("    minh-laptop (192.168.1.22)   RTT 2.1ms   8 domain   v0.1.0");
-        lines.push_back("    nam-desktop (192.168.1.45)   RTT 1.4ms  15 domain   v0.1.0");
-        lines.push_back("    pi-server   (192.168.1.100)  RTT 0.9ms   3 domain   v0.1.0");
+        lines.push_back("  " + Style::bold("Kết nối Peer (" + std::to_string(my_peers_.size()) + " peer online):"));
+        for (const auto& peer : my_peers_) {
+            lines.push_back("    " + peer.hostname + " (" + peer.endpoint + ")   RTT " + peer.rtt + "   " +
+                            std::to_string(peer.domain_count) + " domain   " + peer.version);
+        }
         add_scrollback(lines);
         return;
     }
@@ -451,7 +571,33 @@ void TuiApp::handle_command(const std::string& cmd_line) {
         stats_.domain_count++;
 
         add_scrollback(Style::success(Style::glyph_bullet()) + "  Đã thêm " + Style::bold(name) + " → " + target);
-        add_scrollback(Style::glyph_indent() + "  TTL 60s · đã đồng bộ tới " + std::to_string(stats_.peer_count) + " peer trong 32 ms");
+        add_scrollback(Style::glyph_indent() + "  TTL 60s · đã đồng bộ tới " + std::to_string(my_peers_.size()) + " peer trong 32 ms");
+        return;
+    }
+
+    if (cmd == "/set") {
+        std::string name;
+        std::string target;
+        iss >> name >> target;
+        if (name.empty() || target.empty()) {
+            add_scrollback(Style::error("Lỗi: Thiếu tham số. Cú pháp: /set <tên> <đích mới>"));
+            return;
+        }
+        bool found = false;
+        for (auto& d : my_domains_) {
+            if (d.first == name) {
+                d.second = target;
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            my_domains_.push_back({name, target});
+            stats_.domain_count++;
+        }
+        add_scrollback(Style::success(Style::glyph_bullet()) + "  Đã cập nhật đích cho " + Style::bold(name) + " → " + target);
+        add_scrollback(Style::glyph_indent() + "  Thay đổi đã được phát tán thời gian thực tới " +
+                       std::to_string(my_peers_.size()) + " peer.");
         return;
     }
 
@@ -483,9 +629,64 @@ void TuiApp::handle_command(const std::string& cmd_line) {
         }
         if (found) {
             add_scrollback(Style::success(Style::glyph_bullet()) + "  Đã xóa domain " + Style::bold(name));
+            add_scrollback(Style::glyph_indent() + "  Bản ghi thu hồi (Tombstone) đã gửi tới mạng LAN.");
         } else {
             add_scrollback(Style::error("Không tìm thấy domain " + name + " thuộc sở hữu của bạn."));
         }
+        return;
+    }
+
+    if (cmd == "/info") {
+        std::string name;
+        iss >> name;
+        if (name.empty()) {
+            add_scrollback(Style::error("Lỗi: Thiếu tên domain cần tra cứu. Cú pháp: /info <tên>"));
+            return;
+        }
+
+        DomainInfo info;
+        info.domain = name;
+
+        if (name == "web.lan") {
+            info.owner_node = "thang-pc";
+            info.owner_ip = "192.168.1.10";
+            info.is_local = true;
+            info.target = "192.168.1.10 (self)";
+            info.record_type = "A";
+            info.ttl = "60s";
+            info.vote_count = 2;
+            info.total_peers = 3;
+            info.claim_time = "14:15:30 hôm nay";
+            info.sync_status = "Đang dẫn đầu nhóm bầu cử (2/3 phiếu)";
+            info.metadata = {
+                {"Trạng thái tranh chấp", "Có 1 peer (minh-laptop) khai báo đích khác (192.168.1.22)"},
+                {"Quy tắc R1", "Bản ghi của bạn đang thắng vì đa số phiếu ủng hộ"}
+            };
+        } else {
+            bool is_mine = false;
+            std::string target = "192.168.1.10";
+            for (const auto& d : my_domains_) {
+                if (d.first == name) {
+                    is_mine = true;
+                    target = d.second;
+                    break;
+                }
+            }
+
+            info.owner_node = is_mine ? "thang-pc" : "minh-laptop";
+            info.owner_ip = is_mine ? "192.168.1.10" : "192.168.1.22";
+            info.is_local = is_mine;
+            info.target = target;
+            info.record_type = "A";
+            info.ttl = "60s";
+            info.vote_count = static_cast<int>(my_peers_.size());
+            info.total_peers = static_cast<int>(my_peers_.size());
+            info.claim_time = "12:00:00 hôm nay";
+            info.sync_status = "Đồng bộ hoàn tất trên toàn cụm LAN";
+        }
+
+        auto info_lines = InfoView::render(info);
+        add_scrollback(info_lines);
         return;
     }
 
@@ -504,7 +705,7 @@ void TuiApp::handle_command(const std::string& cmd_line) {
             spinner.update();
             std::vector<std::string> sp_lines = {spinner.render()};
             renderer_.render_dynamic_zone(sp_lines);
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            std::this_thread::sleep_for(std::chrono::milliseconds(90));
         }
         renderer_.clear_dynamic_zone();
 
@@ -525,6 +726,210 @@ void TuiApp::handle_command(const std::string& cmd_line) {
         auto trace_lines = TraceView::render(tr);
         add_scrollback(trace_lines);
         return;
+    }
+
+    if (cmd == "/peers") {
+        auto p_lines = PeersView::render(my_peers_);
+        add_scrollback(p_lines);
+        return;
+    }
+
+    if (cmd == "/peer") {
+        std::string sub;
+        std::string endpoint;
+        iss >> sub >> endpoint;
+        if (sub == "add") {
+            if (endpoint.empty()) {
+                add_scrollback(Style::error("Lỗi: Thiếu địa chỉ peer. Cú pháp: /peer add <ip[:port]>"));
+                return;
+            }
+            Spinner spinner("Đang thử kết nối TCP sync tới " + endpoint + "…");
+            for (int i = 0; i < 4; ++i) {
+                spinner.update();
+                std::vector<std::string> sp_lines = {spinner.render()};
+                renderer_.render_dynamic_zone(sp_lines);
+                std::this_thread::sleep_for(std::chrono::milliseconds(80));
+            }
+            renderer_.clear_dynamic_zone();
+
+            std::string host = "peer-" + std::to_string(my_peers_.size() + 1);
+            my_peers_.push_back({host, endpoint, "1.9 ms", 4, "v0.1.0", true});
+            stats_.peer_count = static_cast<int>(my_peers_.size());
+
+            add_scrollback(Style::success(Style::glyph_bullet()) + "  Đã kết nối thành công tới peer mới: " +
+                           Style::bold(host) + " (" + endpoint + ")");
+            add_scrollback(Style::glyph_indent() + "  Đã nhận 4 domain mới và cập nhật bản đồ mạng LAN.");
+            return;
+        } else if (sub == "rm") {
+            if (endpoint.empty()) {
+                add_scrollback(Style::error("Lỗi: Thiếu IP peer cần xóa. Cú pháp: /peer rm <ip>"));
+                return;
+            }
+            bool found = false;
+            for (auto it = my_peers_.begin(); it != my_peers_.end(); ++it) {
+                if (it->endpoint.find(endpoint) != std::string::npos || it->hostname == endpoint) {
+                    my_peers_.erase(it);
+                    found = true;
+                    break;
+                }
+            }
+            if (found) {
+                stats_.peer_count = static_cast<int>(my_peers_.size());
+                add_scrollback(Style::success(Style::glyph_bullet()) + "  Đã ngắt kết nối và gỡ bỏ peer: " + endpoint);
+            } else {
+                add_scrollback(Style::error("Không tìm thấy peer khớp với: " + endpoint));
+            }
+            return;
+        } else {
+            add_scrollback(Style::error("Cú pháp: /peer add <ip[:port]> hoặc /peer rm <ip>"));
+            return;
+        }
+    }
+
+    if (cmd == "/upstream") {
+        std::string sub;
+        std::string ip;
+        iss >> sub >> ip;
+        if (sub == "add") {
+            if (ip.empty()) {
+                add_scrollback(Style::error("Lỗi: Thiếu IP upstream DNS. Cú pháp: /upstream add <ip>"));
+                return;
+            }
+            int prio = static_cast<int>(my_upstreams_.size() + 1);
+            my_upstreams_.push_back({ip + ":53", "Tùy chỉnh", "20 ms", prio, true});
+            add_scrollback(Style::success(Style::glyph_bullet()) + "  Đã thêm DNS upstream: " + ip);
+            return;
+        } else if (sub == "rm") {
+            if (ip.empty()) {
+                add_scrollback(Style::error("Lỗi: Thiếu IP upstream DNS. Cú pháp: /upstream rm <ip>"));
+                return;
+            }
+            bool found = false;
+            for (auto it = my_upstreams_.begin(); it != my_upstreams_.end(); ++it) {
+                if (it->ip_port.find(ip) != std::string::npos) {
+                    my_upstreams_.erase(it);
+                    found = true;
+                    break;
+                }
+            }
+            if (found) {
+                add_scrollback(Style::success(Style::glyph_bullet()) + "  Đã gỡ bỏ DNS upstream: " + ip);
+            } else {
+                add_scrollback(Style::error("Không tìm thấy upstream khớp với: " + ip));
+            }
+            return;
+        } else {
+            auto up_lines = UpstreamView::render(my_upstreams_);
+            add_scrollback(up_lines);
+            return;
+        }
+    }
+
+    if (cmd == "/conflicts") {
+        std::string sub;
+        iss >> sub;
+        if (sub == "clear") {
+            mock_conflicts_.clear();
+            stats_.conflict_count = 0;
+            add_scrollback(Style::success(Style::glyph_bullet()) + "  Đã xóa sạch các xung đột mẫu.");
+            return;
+        } else if (sub == "mock") {
+            ConflictVoteGroup g1{1, 2, "192.168.1.10", {"thang-pc (bạn)", "nam-desktop"}, true};
+            ConflictVoteGroup g2{2, 1, "192.168.1.22", {"minh-laptop"}, false};
+            mock_conflicts_ = {{"web.lan", "A", {g1, g2}, "Dùng \"/info web.lan\" để xem thời điểm claim hoặc đổi tên miền."}};
+            stats_.conflict_count = 1;
+            add_scrollback(Style::warning(Style::glyph_bullet()) + "  Đã kích hoạt xung đột mẫu trên web.lan.");
+            return;
+        }
+        auto conf_lines = ConflictView::render(mock_conflicts_);
+        add_scrollback(conf_lines);
+        return;
+    }
+
+    if (cmd == "/logs") {
+        std::string flag;
+        iss >> flag;
+        if (flag == "--follow" || flag == "-f") {
+            handle_logs_follow();
+            return;
+        }
+        auto log_lines = LogView::render(mock_logs_);
+        add_scrollback(log_lines);
+        add_scrollback("  " + Style::dim("Gợi ý: Dùng \"/logs --follow\" để xem trực tiếp các gói DNS gửi tới theo thời gian thực."));
+        return;
+    }
+
+    if (cmd == "/network") {
+        std::string sub;
+        std::string arg;
+        iss >> sub >> arg;
+
+        if (sub == "key") {
+            std::string action;
+            iss >> action;
+            if (arg == "set") {
+                network_info_.psk_enabled = true;
+                add_scrollback(Style::success(Style::glyph_bullet()) + "  Đã kích hoạt khóa mạng PSK thành công.");
+                add_scrollback(Style::glyph_indent() + "  Mọi gói UDP Discovery và TCP Sync hiện được mã hóa bằng AES-256-GCM.");
+                return;
+            } else if (arg == "clear") {
+                network_info_.psk_enabled = false;
+                add_scrollback(Style::warning(Style::glyph_bullet()) + "  Đã xóa khóa mạng PSK. Cụm mạng chuyển về chế độ mở.");
+                return;
+            }
+        } else if (sub == "name") {
+            if (arg.empty()) {
+                add_scrollback(Style::error("Lỗi: Thiếu tên mạng mới. Cú pháp: /network name <tên>"));
+                return;
+            }
+            network_info_.network_name = arg;
+            welcome_info_.network_name = arg;
+            add_scrollback(Style::success(Style::glyph_bullet()) + "  Đã đổi tên cụm mạng LAN sang: \"" + arg + "\"");
+            add_scrollback(Style::glyph_indent() + "  Đang tái phát hiện các node có cùng tên mạng...");
+            return;
+        }
+
+        network_info_.active_peers = static_cast<int>(my_peers_.size());
+        auto net_lines = NetworkView::render(network_info_);
+        add_scrollback(net_lines);
+        return;
+    }
+
+    if (cmd == "/service") {
+        std::string sub;
+        iss >> sub;
+        if (sub == "status") {
+            std::vector<std::string> lines;
+            lines.push_back(Style::primary(Style::glyph_bullet()) + "  Trạng thái dịch vụ nền Ldns Service:");
+#if defined(_WIN32)
+            lines.push_back(Style::glyph_indent() + "  Tên dịch vụ: LdnsService (Windows Service)");
+            lines.push_back(Style::glyph_indent() + "  Trạng thái:  " + Style::success("Đang chạy (SERVICE_RUNNING · PID 3840)"));
+            lines.push_back(Style::glyph_indent() + "  Cổng gắn:    \\.\\pipe\\ldns-ipc (Named Pipe)");
+#else
+            lines.push_back(Style::glyph_indent() + "  Tên dịch vụ: ldns.service (systemd unit)");
+            lines.push_back(Style::glyph_indent() + "  Trạng thái:  " + Style::success("active (running)"));
+            lines.push_back(Style::glyph_indent() + "  Cổng gắn:    /var/run/ldns.sock (Unix Domain Socket)");
+#endif
+            lines.push_back(Style::glyph_indent() + "  Tự khởi động: Bật (Automatic Startup)");
+            add_scrollback(lines);
+            return;
+        } else if (sub == "install") {
+            active_dialog_ = std::make_unique<Dialog>(
+                "Cài đặt Ldns làm Dịch vụ Nền (System Service)?",
+                std::vector<std::string>{
+                    "Dịch vụ sẽ tự động chạy ngầm cùng Windows để phân giải DNS",
+                    "cả khi bạn đóng cửa sổ terminal."
+                },
+                std::vector<DialogOption>{
+                    {1, "Cài đặt ngay (Yêu cầu quyền Administrator)"},
+                    {2, "Hủy bỏ"}
+                }
+            );
+            return;
+        } else {
+            add_scrollback(Style::dim("Cú pháp: /service status | /service install | /service start | /service stop"));
+            return;
+        }
     }
 
     if (cmd == "/doctor") {
@@ -573,23 +978,6 @@ void TuiApp::handle_command(const std::string& cmd_line) {
             add_scrollback(Style::success(Style::glyph_bullet()) + "  Đã khôi phục DNS hệ thống về trạng thái ban đầu.");
             return;
         }
-    }
-
-    if (cmd == "/peers") {
-        std::vector<std::string> lines;
-        lines.push_back(Style::primary(Style::glyph_bullet()) + "  Danh sách các peer trong mạng LAN:");
-        lines.push_back("  " + Style::bold("minh-laptop") + "  192.168.1.22:5391   RTT: 2.1ms   8 domain    ●  online");
-        lines.push_back("  " + Style::bold("nam-desktop") + "  192.168.1.45:5391   RTT: 1.4ms  15 domain    ●  online");
-        lines.push_back("  " + Style::bold("pi-server") + "    192.168.1.100:5391  RTT: 0.9ms   3 domain    ●  online");
-        add_scrollback(lines);
-        return;
-    }
-
-    if (cmd == "/conflicts") {
-        std::vector<std::string> lines;
-        lines.push_back(Style::success(Style::glyph_bullet()) + "  Không có xung đột tên miền nào trên mạng LAN hiện tại.");
-        add_scrollback(lines);
-        return;
     }
 
     add_scrollback(Style::error("Lệnh không xác định: " + cmd + ". Gõ /help để xem danh sách lệnh."));

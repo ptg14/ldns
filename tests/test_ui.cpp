@@ -112,6 +112,17 @@ TEST_CASE("UI: SlashMenu filtering and navigation") {
     ldns::ui::SlashMenu menu;
     CHECK(!menu.filtered_items().empty());
 
+    menu.set_query("/serv");
+    CHECK(menu.filtered_items().size() == 1);
+    CHECK(menu.filtered_items()[0].name == "/service");
+
+    menu.set_query("/s");
+    bool has_service = false;
+    for (const auto& item : menu.filtered_items()) {
+        if (item.name == "/service") has_service = true;
+    }
+    CHECK(has_service);
+
     menu.set_query("/doc");
     CHECK(menu.filtered_items().size() == 1);
     CHECK(menu.filtered_items()[0].name == "/doctor");
@@ -210,4 +221,84 @@ TEST_CASE("UI: WelcomePanel responsive rendering at different widths") {
             CHECK(ldns::ui::CharWidth::display_width(l) <= 35);
         }
     }
+}
+
+#include "ui/widgets/conflict_view.hpp"
+#include "ui/widgets/info_view.hpp"
+#include "ui/widgets/log_view.hpp"
+#include "ui/widgets/network_view.hpp"
+#include "ui/widgets/peers_view.hpp"
+#include "ui/widgets/upstream_view.hpp"
+
+TEST_CASE("UI: ConflictView rendering") {
+    SUBCASE("No conflicts") {
+        auto lines = ldns::ui::ConflictView::render({});
+        CHECK(!lines.empty());
+        CHECK(lines[0].find("Không có xung đột") != std::string::npos);
+    }
+
+    SUBCASE("With conflict groups") {
+        ldns::ui::ConflictVoteGroup g1{1, 2, "192.168.1.10", {"node1", "node2"}, true};
+        ldns::ui::ConflictVoteGroup g2{2, 1, "192.168.1.22", {"node3"}, false};
+        ldns::ui::ConflictDomain cd{"web.lan", "A", {g1, g2}, "Hint"};
+        auto lines = ldns::ui::ConflictView::render({cd});
+        CHECK(!lines.empty());
+        CHECK(lines[0].find("Phát hiện 1 domain") != std::string::npos);
+    }
+}
+
+TEST_CASE("UI: InfoView rendering") {
+    ldns::ui::DomainInfo info;
+    info.domain = "app.lan";
+    info.owner_node = "thang-pc";
+    info.owner_ip = "192.168.1.10";
+    info.is_local = true;
+    info.record_type = "A";
+    info.target = "192.168.1.10";
+    info.ttl = "60s";
+    info.vote_count = 3;
+    info.total_peers = 3;
+    info.claim_time = "14:00";
+    info.sync_status = "Đồng bộ 100%";
+
+    auto lines = ldns::ui::InfoView::render(info);
+    CHECK(!lines.empty());
+    CHECK(lines[0].find("app.lan") != std::string::npos);
+}
+
+TEST_CASE("UI: LogView formatting") {
+    ldns::ui::QueryLogEntry entry{
+        "14:00:00.000", "127.0.0.1", "A", "app.lan", "[L:Local]", "NOERROR", "150 µs"
+    };
+    std::string formatted = ldns::ui::LogView::format_entry(entry);
+    CHECK(!formatted.empty());
+    CHECK(formatted.find("app.lan") != std::string::npos);
+
+    auto lines = ldns::ui::LogView::render({entry});
+    CHECK(lines.size() >= 3);
+}
+
+TEST_CASE("UI: PeersView rendering") {
+    ldns::ui::PeerNode p{"minh-laptop", "192.168.1.22:5391", "2.1 ms", 8, "v0.1.0", true};
+    auto lines = ldns::ui::PeersView::render({p});
+    CHECK(!lines.empty());
+    CHECK(lines[0].find("Danh sách kết nối Peer LAN") != std::string::npos);
+}
+
+TEST_CASE("UI: UpstreamView rendering") {
+    ldns::ui::UpstreamServer s{"1.1.1.1:53", "Cloudflare", "14 ms", 1, true};
+    auto lines = ldns::ui::UpstreamView::render({s});
+    CHECK(!lines.empty());
+    CHECK(lines[0].find("Upstream DNS Server") != std::string::npos);
+}
+
+TEST_CASE("UI: NetworkView rendering") {
+    ldns::ui::NetworkInfo info;
+    info.network_name = "default";
+    info.psk_enabled = false;
+    info.active_peers = 2;
+
+    auto lines = ldns::ui::NetworkView::render(info);
+    CHECK(!lines.empty());
+    CHECK(lines[0].find("Cấu hình Cụm Mạng Ldns") != std::string::npos);
 }

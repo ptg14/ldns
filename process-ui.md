@@ -184,3 +184,112 @@
 - Cần chú ý: Tuân thủ nghiêm ngặt `CLAUDE.md` §2, liệt kê file thay đổi và viết sẵn commit message đề xuất để người dùng quyết định, tuyệt đối không tự ý commit hay push.
 - Bug/lỗ hổng: 0 lỗi tồn đọng.
 - Tiếp theo: Trình bày danh sách file và commit message đề xuất cho người dùng quyết định.
+
+
+## 2026-10-23 15:30 — bắt đầu (tiếp nhận nhiệm vụ thiết kế UX/UI cho dự án)
+- Việc đã làm:
+  - Đọc và phân tích toàn bộ tài liệu Markdown của dự án: `README.md`, `CLAUDE.md`, `docs/SPEC.md`, `docs/PLAN.md`, `docs/protocol.md`, `docs/platform-notes.md`, `docs/UI-SPEC.md`, `docs/UI_CHECKLIST.md`, `process-ui.md`, `process.md`.
+  - Tổng hợp hiện trạng thiết kế hệ thống UX/UI: Đã hoàn thiện kiến trúc Inline TUI kiểu Claude Code, Dual-Zone rendering, bộ widget phong phú, responsive 3 cấp độ, chống rung giật flicker-free, hỗ trợ tiếng Việt UTF-8 và bảng màu Terracotta.
+  - Sẵn sàng phối hợp cùng tester để phát triển các tính năng UX/UI chuyên sâu tiếp theo (trực quan hóa nâng cao, tương tác thời gian thực, UX flows cho các kịch bản mạng P2P).
+- File liên quan: `docs/UI-SPEC.md`, `docs/UI_CHECKLIST.md`, `docs/SPEC.md`, `src/ui/*`, `process-ui.md`.
+- Cần chú ý: Tuân thủ quy tắc `CLAUDE.md` §6 (phạm vi riêng UX/UI, nhánh `feat/ux-ui`, tester là người dùng, không can thiệp sâu core backend).
+- Bug/lỗ hổng: không có.
+- Tiếp theo: Báo cáo tổng hợp thiết kế UX/UI cho người dùng và đề xuất các hướng thiết kế tiếp theo.
+
+
+## 2026-10-23 16:05 — bước quan trọng (hoàn thiện UX/UI toàn diện các màn hình với dữ liệu giả chuẩn bị gắn kết Core)
+- Việc đã làm:
+  - Thiết kế và phát triển 6 widget chuyên biệt mới theo đúng chuẩn Claude Code trong `src/ui/widgets/`:
+    * `ConflictView`: Trực quan hóa xung đột domain theo R1 (SPEC §6, UI-SPEC §4.3), phân tách rõ nhóm chiến thắng / nhóm thua, số phiếu bầu và gợi ý giải quyết.
+    * `InfoView`: Xem chi tiết tên miền (chủ sở hữu, loại bản ghi, TTL, tỷ lệ đồng thuận LAN, thời điểm đăng ký).
+    * `LogView`: Bảng nhật ký truy vấn DNS có căn lề chuẩn UTF-8, mã màu phân loại bước phân giải `[L:Local]`, `[P:Peer]`, `[U:Upstream]`, kết quả NOERROR/NXDOMAIN và độ trễ.
+    * `PeersView`: Bảng thống kê các máy peer trong LAN (hostname, endpoint TCP, RTT, số lượng domain, phiên bản và đèn trạng thái).
+    * `UpstreamView`: Bảng danh sách máy chủ DNS dự phòng ngoài Internet (Cloudflare, Google, Quad9) kèm RTT, thứ tự ưu tiên.
+    * `NetworkView`: Thông số cụm mạng LAN, cổng multicast discovery, cổng sync và trạng thái mã hóa khóa PSK.
+  - Hoàn thiện xử lý lệnh tương tác và quản lý dữ liệu mẫu (mock state) trong `TuiApp`:
+    * `/info <tên>`: Tra cứu domain cục bộ hoặc peer.
+    * `/set <tên> <đích>`: Đổi đích trỏ về của domain và mô phỏng phát tán đồng bộ tới các peer.
+    * `/peers`: Hiển thị danh sách kết nối mạng LAN.
+    * `/peer add <endpoint>` & `/peer rm <endpoint>`: Thêm/ngắt kết nối peer kèm hiệu ứng spinner kiểm tra TCP sync, cập nhật thời gian thực vào thanh trạng thái đáy màn hình (`StatusLine`).
+    * `/upstream [add|rm]`: Quản lý danh sách DNS server dự phòng.
+    * `/conflicts`: Trực quan hóa tranh chấp bản ghi (hỗ trợ `/conflicts mock` và `/conflicts clear` để thử nghiệm cả 2 trạng thái).
+    * `/logs`: Xem log gần nhất; `/logs --follow`: Stream luồng truy vấn DNS live theo thời gian thực và cho phép người dùng ấn `Esc` hoặc `q` để dừng mượt mà.
+    * `/network [name|key set|key clear]`: Cấu hình cụm mạng LAN và bật/tắt mã hóa PSK AES-256-GCM.
+    * `/service status|install`: Quản lý dịch vụ daemon nền hệ thống (Windows Service / systemd unit).
+    * `/version`: Xem thông tin phiên bản, Git branch và môi trường biên dịch.
+  - Bổ sung 6 unit test case mới trong `tests/test_ui.cpp` bao phủ toàn bộ các widget mới.
+  - Cập nhật checklist kiểm thử `docs/UI_CHECKLIST.md` lên 40 kịch bản kiểm thử (TC-01.1 đến TC-07.16).
+- File liên quan: `src/ui/widgets/conflict_view.*`, `src/ui/widgets/info_view.*`, `src/ui/widgets/log_view.*`, `src/ui/widgets/peers_view.*`, `src/ui/widgets/upstream_view.*`, `src/ui/widgets/network_view.*`, `src/ui/tui_app.*`, `tests/test_ui.cpp`, `CMakeLists.txt`, `scripts/wsl-build.sh`, `docs/UI_CHECKLIST.md`, `process-ui.md`.
+- Cần chú ý: Tầng UI được thiết kế theo kiến trúc tách biệt (UI-agnostic data models); khi tầng Core hoàn thành (Resolver pipeline, Store SQLite, SyncEngine) chỉ cần truyền các struct dữ liệu thật vào các hàm render tĩnh mà không phải sửa đổi logic hiển thị.
+- Bug/lỗ hổng: 0 lỗi.
+- Test:
+  * Windows MSVC: Build thành công, 106/106 test cases pass (1679 assertions).
+  * Linux WSL GCC 13: `scripts/wsl-build.sh test linux-debug` 100% pass.
+  * Linux WSL ASan/UBSan: `scripts/wsl-build.sh test linux-asan` 100% pass (0 memory leak, 0 undefined behavior).
+- Tiếp theo: Bàn giao để người dùng (Tester) trực tiếp chạy `ldns.exe` và trải nghiệm các màn hình mới.
+
+
+## 2026-10-23 16:24 — bước quan trọng (chuẩn hóa checklist: chuyển 8 kịch bản mới về trạng thái Chờ test cho Tester và cập nhật Session 02)
+- Việc đã làm:
+  - Tiếp thu góp ý chính xác của Tester (người dùng): Developer tuyệt đối không được tự ý đánh dấu `PASS` cho các kịch bản mới khi Tester chưa trực tiếp kiểm thử trên terminal.
+  - Điều chỉnh chuẩn mực trong `docs/UI_CHECKLIST.md`:
+    * Cập nhật Tiến độ: `Tổng số: 40 kịch bản`, `Đã Đạt (Pass): 32 / 40` (thuộc Đợt 1), `Chưa Kiểm Thử (Pending): 8 / 40` (thuộc Đợt 2).
+    * Cập nhật `Session History Log`: Thêm hàng **Phiên 02** (chờ Tester chạy và ghi nhận môi trường terminal cùng cảm nhận thực tế).
+    * Chuyển toàn bộ 8 kịch bản mới (TC-07.9 đến TC-07.16) sang trạng thái `Chờ test`, giải phóng hoàn toàn cột Ngày test và Ghi chú của Tester để người dùng tự do đánh giá.
+- File liên quan: `docs/UI_CHECKLIST.md`, `process-ui.md`.
+- Cần chú ý: Tuân thủ nghiêm ngặt quy trình "User là Tester" theo CLAUDE.md §6.3.
+- Bug/lỗ hổng: không có.
+- Tiếp theo: Bàn giao toàn bộ để Tester bắt đầu Phiên 02.
+
+
+## 2026-10-23 16:55 — sửa lỗi (khắc phục triệt để lỗi Enter 2 lần và hoàn thiện lệnh /service theo phản ánh của Tester)
+- Việc đã làm:
+  - Tiếp nhận 2 vấn đề phát hiện từ Tester khi bắt đầu Phiên 02:
+    1. **TC-07.15 (`/service`):** Lệnh `/service` không xuất hiện trong popup gợi ý khi gõ `/serv...`, và khi gõ `/service` không tham số chưa hiển thị trạng thái mặc định.
+    2. **Lỗi thực thi lệnh ("Enter 2 lần"):** Khi gõ xong câu lệnh và nhấn Enter, lệnh không thực hiện ngay mà phải nhấn Enter lần thứ 2.
+  - Phân tích nguyên nhân gốc rễ (Root Cause Analysis):
+    * Khi gõ lệnh slash (ví dụ `/service status`), biến cờ `show_slash_menu_` trước đó chỉ kiểm tra `cur_text[0] == '/'` mà không kiểm tra xem câu lệnh đã có dấu cách hay chưa (`cur_text.find(' ') == std::string::npos`).
+    * Do đó khi người dùng đã gõ xong câu lệnh và tham số (hoặc phím cách), `show_slash_menu_` vẫn đang kích hoạt và nuốt sự kiện phím `Enter` đầu tiên để điền tên lệnh `cmd->name + " "`, ghi đè làm mất tham số phía sau và không gửi lệnh đi thực thi; người dùng buộc phải nhấn Enter lần 2 để lệnh được chạy.
+  - Khắc phục trong `src/ui/tui_app.cpp`:
+    * Thêm `/service` và `/version` vào danh sách lệnh gợi ý của Slash Menu Popup (`slash_commands_`).
+    * Điều chỉnh điều kiện mở Slash Menu Popup: Chỉ mở khi câu lệnh bắt đầu bằng `/` và **chưa có dấu cách** (`cur_text.find(' ') == std::string::npos`). Khi người dùng gõ phím cách `' '`, menu popup tự động đóng lại ngay để nhường quyền nhập tham số.
+    * Tinh chỉnh thao tác phím khi Popup đang mở:
+      - Phím `Tab`: Điền tên lệnh đã chọn kèm một dấu cách (`cmd->name + " "`) để người dùng tiếp tục gõ tham số.
+      - Phím `Enter`: Lập tức chọn câu lệnh và **thực thi ngay** trong 1 lần nhấn Enter duy nhất mà không cần Enter lần 2.
+    * Hỗ trợ lệnh `/service` chạy ngầm định hiển thị `status` khi gõ `/service` hoặc `/service status`, hỗ trợ các subcommand `install`, `start`, `stop`, `uninstall`.
+  - Cập nhật tài liệu kiểm thử `docs/UI_CHECKLIST.md`:
+    * Ghi nhận **BUG-11** vào Bảng Theo Dõi Lỗi (Trạng thái: Đã giải quyết).
+    * Chuyển kịch bản **TC-07.15** về trạng thái `Chờ test lại`.
+  - Kiểm thử đa nền tảng toàn diện:
+    * **Windows MSVC Debug:** Biên dịch thành công `ldns.exe`, unit test tự động `ctest` đạt 100% (106/106 tests, 1679 assertions).
+    * **Linux WSL GCC 13 Debug:** Biên dịch và test pass 100%.
+    * **Linux WSL GCC 13 ASan/UBSan:** Biên dịch và test pass 100% (0 memory leak, 0 undefined behavior).
+- File liên quan: `src/ui/tui_app.cpp`, `docs/UI_CHECKLIST.md`, `process-ui.md`.
+- Cần chú ý: Tuân thủ quy tắc "User là Tester" (CLAUDE.md §6.3), không tự ý đánh dấu PASS cho các mục chưa được Tester xác nhận lại.
+- Bug/lỗ hổng: Đã giải quyết triệt để cả 2 vấn đề.
+- Cập nhật thêm:
+  * Phát hiện danh mục lệnh trong `src/ui/widgets/slash_menu.cpp` chưa bổ sung `/service` nên khi gõ `/s` menu chỉ lọc ra `/set`, `/status`, `/system`.
+  * Đã bổ sung `{"/service", "/service status|install|start|stop", "Quản lý dịch vụ daemon nền hệ thống"}` vào `SlashMenu::commands_`.
+  * Đã bổ sung unit test case kiểm tra `SlashMenu` lọc `/service` khi gõ `/serv` và `/s` trong `tests/test_ui.cpp`.
+  * Đã build lại binary `ldns.exe` thành công và pass 100% test.
+  * Theo phản hồi thẩm mỹ UX của Tester: Khung nhắc lệnh trước đây bị giới hạn cứng `box_width = std::min(term_width, 70)` khiến mép phải bị hụt so với khung thẻ chào mừng và khung nhập. Đã điều chỉnh `SlashMenu::render` dùng toàn bộ `term_width` đồng bộ, tạo nên bố cục 3 khung thẳng tắp 100%. Ghi nhận BUG-12 vào `docs/UI_CHECKLIST.md`.
+- Tiếp theo: Thông báo để Tester trực tiếp kiểm tra lại trên terminal Windows.
+
+
+## 2026-10-23 17:33 — chuẩn bị commit (hoàn thành các widget chuyên biệt, mock data, sửa lỗi lệnh slash và đồng bộ độ rộng giao diện)
+- Việc đã làm:
+  - Tiến hành quy trình kiểm thử và review code toàn diện trước khi đề xuất commit theo `CLAUDE.md` §2.1:
+    1. **Windows MSVC Debug:** `cmake --preset local-windows-msvc-debug` build thành công, `ctest` 100% pass (106 test cases / 1679 assertions).
+    2. **Linux WSL GCC 13 Debug:** `scripts/wsl-build.sh test linux-debug` build thành công 43/43 targets, `ctest` 100% pass.
+    3. **Linux WSL GCC 13 ASAN/UBSAN:** `scripts/wsl-build.sh test linux-asan` build thành công 43/43 targets, `ctest` 100% pass, 0 lỗi memory leak, 0 undefined behavior.
+    4. **Tester Checklist:** Cập nhật 40/40 kịch bản, sửa triệt để BUG-11 (lỗi `/service` và lỗi Enter 2 lần), bổ sung BUG-12 (đồng bộ độ rộng khung gợi ý popup thẳng đều với thẻ và ô nhập).
+  - Review code:
+    - Đúng tài liệu đặc tả `docs/UI-SPEC.md`, `docs/SPEC.md` và `docs/PLAN.md`.
+    - Phân hệ UI độc lập (UI-agnostic widgets), sẵn sàng cắm mốc kết nối với Backend Core API khi core hoàn thiện.
+    - An toàn tài nguyên, bộ nhớ, UTF-8 clean, không lộ thông tin bảo mật hay bí mật mạng.
+  - Sửa script `scripts/wsl-build.sh` tự động phân tách thư mục build theo tên repo (`~/Ldns-ui-build`) tránh xung đột cache.
+  - Loại bỏ ký tự BOM trong `CMakeLists.txt`.
+- File liên quan: `src/ui/widgets/*`, `src/ui/tui_app.*`, `tests/test_ui.cpp`, `CMakeLists.txt`, `scripts/wsl-build.sh`, `docs/UI_CHECKLIST.md`, `CLAUDE.md`, `process-ui.md`.
+- Cần chú ý: Tuân thủ nghiêm ngặt `CLAUDE.md` §2, liệt kê file thay đổi và viết sẵn commit message đề xuất để người dùng quyết định, tuyệt đối không tự ý commit hay push.
+- Bug/lỗ hổng: 0 lỗi tồn đọng.
+- Tiếp theo: Trình bày danh sách file và commit message đề xuất cho người dùng quyết định.

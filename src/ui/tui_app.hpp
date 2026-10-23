@@ -6,10 +6,16 @@
 #include <vector>
 #include "ui/inline_renderer.hpp"
 #include "ui/term/terminal.hpp"
+#include "ui/widgets/conflict_view.hpp"
 #include "ui/widgets/dialog.hpp"
+#include "ui/widgets/info_view.hpp"
 #include "ui/widgets/input_box.hpp"
+#include "ui/widgets/log_view.hpp"
+#include "ui/widgets/network_view.hpp"
+#include "ui/widgets/peers_view.hpp"
 #include "ui/widgets/slash_menu.hpp"
 #include "ui/widgets/status_line.hpp"
+#include "ui/widgets/upstream_view.hpp"
 #include "ui/widgets/welcome_panel.hpp"
 
 namespace ldns::ui {
@@ -29,6 +35,7 @@ private:
     void render_all(bool full_screen_refresh = false);
     void redraw_full_view();
     void handle_command(const std::string& cmd_line);
+    void handle_logs_follow();
 
     void add_scrollback(const std::string& line);
     void add_scrollback(const std::vector<std::string>& lines);
@@ -57,8 +64,13 @@ private:
     };
     std::vector<ScrollbackEntry> scrollback_entries_;
 
-    // Local state for mock/interactive UI demonstration
+    // Mock/interactive UI state (ready to bind to Core services upon completion)
     std::vector<std::pair<std::string, std::string>> my_domains_;
+    std::vector<PeerNode> my_peers_;
+    std::vector<UpstreamServer> my_upstreams_;
+    NetworkInfo network_info_;
+    std::vector<ConflictDomain> mock_conflicts_;
+    std::vector<QueryLogEntry> mock_logs_;
 };
 
 }  // namespace ldns::ui

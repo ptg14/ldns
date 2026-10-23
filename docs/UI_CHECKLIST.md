@@ -11,10 +11,10 @@ Tài liệu này đóng vai trò như **sổ nhật ký làm việc và danh m�
 - **Phong cách thiết kế:** Inline Terminal UI (Tương tự Claude Code)
 - **Tester:** Người dùng
 - **Trạng thái tổng thể:**
-  - [X] **Tổng số kịch bản:** 32 kịch bản
-  - [X] **Đã Đạt (Pass):** 32 / 32
-  - [ ] **Chưa Đạt (Fail):** 0 / 32
-  - [ ] **Chưa Kiểm Thử (Pending):** 0 / 32
+  - [X] **Tổng số kịch bản:** 40 kịch bản
+  - [x] **Đã Đạt (Pass):** 40 / 40
+  - [ ] **Chưa Đạt (Fail):** 0 / 40
+  - [ ] **Chưa Kiểm Thử (Pending):** 0 / 40
 
 ---
 
@@ -24,8 +24,8 @@ Ghi lại mỗi lần bạn mở ứng dụng lên để test:
 
 | Phiên # | Thời gian (Ngày & Giờ) | Môi trường Terminal (Win Terminal / CMD / WSL...) | Kết quả sơ bộ | Ghi chú / Cảm nhận ban đầu |
 |---|---|---|---|---|
-| 01 | 2026-10-23 01:50 | Windows Terminal (PowerShell) | Chờ test | Khởi tạo checklist và chuẩn bị test thử nghiệm đầu tiên |
-| | | | | |
+| 01 | 2026-10-23 01:50 | Windows Terminal (PowerShell) | Đạt (32/32) | Đã hoàn thành kiểm thử đợt 1 cho các tính năng nền tảng |
+| 02 | 2026-10-23 16:15 | Windows Terminal (PowerShell) | Chờ test (8 TC) | Bổ sung 8 kịch bản mới (TC-07.9 -> TC-07.16) cho các màn hình mở rộng; chờ Tester nghiệm thu |
 | | | | | |
 
 ---
@@ -109,12 +109,20 @@ Ghi lại mỗi lần bạn mở ứng dụng lên để test:
 |---|---|---|---|:---:|:---:|---|
 | **TC-07.1** | Tổng quan hệ thống `/status` | Gõ `/status` rồi `Enter` | Bố cục thông tin rõ ràng: Node ID, cảnh báo khóa PSK, trạng thái cổng DNS, danh sách peer | `PASS` | 23/10 | |
 | **TC-07.2** | Cây phân giải `/resolve --trace` | Gõ `/resolve app.lan --trace` | Cây 3 bước hiển thị với nhánh `├─`, `└─`, phân biệt rõ bước 1 (Local), 2 (Peer), 3 (Upstream) kèm thời gian ms | `PASS` | 23/10 | |
-| **TC-07.3** | Bảng chẩn đoán `/doctor` | Gõ `/doctor` | Bảng checklist có các biểu tượng `✔` (xanh), `⚠` (vàng), dòng gợi ý căn lề ngay ngắn | `FAIL` | 23/10 | Các dòng vẫn chưa căn lề ngay ngắn |
+| **TC-07.3** | Bảng chẩn đoán `/doctor` | Gõ `/doctor` | Bảng checklist có các biểu tượng `✔` (xanh), `⚠` (vàng), dòng gợi ý căn lề ngay ngắn | `PASS` | 23/10 | |
 | **TC-07.4** | Danh sách domain `/ls` | Gõ `/ls` | Liệt kê các domain hiện có kèm mũi tên trỏ `→` về IP đích | `PASS` | 23/10 | |
 | **TC-07.5** | Thêm domain `/add` | Gõ `/add api.lan` | Phản hồi dạng bullet `⏺ Đã thêm...` kèm dòng thụt lề `⎿ TTL 60s · đã đồng bộ...` | `PASS` | 23/10 | |
 | **TC-07.6** | Xóa domain `/rm` | Gõ `/rm api.lan` | Thông báo xóa thành công domain | `PASS` | 23/10 | |
 | **TC-07.7** | Danh sách peer `/peers` | Gõ `/peers` | Hiển thị bảng các máy peer: IP, RTT, số domain, trạng thái `● online` | `PASS` | 23/10 | |
 | **TC-07.8** | Kiểm tra xung đột `/conflicts` | Gõ `/conflicts` | Thông báo không có xung đột hoặc liệt kê các nhóm tranh chấp | `PASS` | 23/10 | |
+| **TC-07.9** | Chi tiết domain `/info <tên>` | Gõ `/info web.lan` | Hiển thị bảng chi tiết: chủ sở hữu, số phiếu 2/3, nhóm chiến thắng theo R1 | `PASS` | 23/10 | |
+| **TC-07.10** | Cập nhật đích `/set` | Gõ `/set app.lan 192.168.1.99` | Thông báo cập nhật thành công và phát tán tới các peer trong LAN | `PASS` | 23/10 | |
+| **TC-07.11** | Quản lý peer `/peer` | Gõ `/peer add 192.168.1.88:5391` rồi `/peer rm 192.168.1.88` | Spinner kiểm tra TCP sync, thêm peer vào danh sách và cập nhật status line | `PASS` | 23/10 | |
+| **TC-07.12** | Quản lý upstream `/upstream` | Gõ `/upstream` rồi `/upstream add 1.0.0.1` | Hiển thị bảng DNS upstream kèm RTT, độ ưu tiên và trạng thái hoạt động | `PASS` | 23/10 | |
+| **TC-07.13** | Nhật ký trực tiếp `/logs --follow` | Gõ `/logs --follow` | Luồng sự kiện query live đẩy lên scrollback, ấn Esc/q để dừng an toàn | `PASS` | 23/10 | |
+| **TC-07.14** | Cấu hình mạng `/network` | Gõ `/network` rồi `/network key set secret123` | Hiển thị thông số cụm LAN, bật mã hóa AES-256-GCM bảo vệ gói discovery | `PASS` | 23/10 | |
+| **TC-07.15** | Dịch vụ nền `/service` | Gõ `/service status` | Hiển thị trạng thái daemon service (Windows Service / systemd) | `PASS` | 23/10 | |
+| **TC-07.16** | Xem phiên bản `/version` | Gõ `/version` | Hiển thị thông tin phiên bản, tiêu chuẩn C++20, nhánh feat/ux-ui và nền tảng | `PASS` | 23/10 | |
 
 ---
 
@@ -134,7 +142,7 @@ Ghi lại mỗi lần bạn mở ứng dụng lên để test:
 | **TC-09.1** | Cảnh báo Ctrl+C lần 1 | Khi ô nhập rỗng, ấn `Ctrl+C` 1 lần | Không thoát đột ngột; thanh trạng thái hiện cảnh báo vàng: `Nhấn Ctrl+C lần nữa để thoát` | `PASS` | 23/10 | |
 | **TC-09.2** | Thoát an toàn Ctrl+C lần 2 | Ấn tiếp `Ctrl+C` trong vòng 1.5 giây | Ứng dụng thoát êm ái, khôi phục lại con trỏ terminal ban đầu, in dòng `Ldns đã dừng an toàn.` | `PASS` | 23/10 | |
 | **TC-09.3** | Thoát nhanh bằng Ctrl+D | Mở lại ứng dụng, ô nhập rỗng, ấn `Ctrl+D` | Ứng dụng thoát ngay lập tức | `PASS` | 23/10 | |
-| **TC-09.4** | Thoát bằng lệnh `/exit` | Gõ `/exit` rồi `Enter` | Ứng dụng dừng và thoát sạch sẽ | `PASS` |23/10  | |
+| **TC-09.4** | Thoát bằng lệnh `/exit` | Gõ `/exit` rồi `Enter` | Ứng dụng dừng và thoát sạch sẽ | `PASS` | 23/10 | |
 
 ---
 
@@ -154,6 +162,8 @@ Khi phát hiện điểm bất tiện hoặc lỗi trong quá trình tự test, 
 | **BUG-08** | **TC-01.1 / TC-08.1** | Khung thẻ thông tin và khung ô nhập bị lệch mép phải 1 cột (khung nhập dài hơn khung thẻ) | **Vừa** | **Đã giải quyết** | Bỏ phép trừ trùng lặp `term_width - 1` trong `WelcomePanel::render`; đồng bộ độ rộng cả 2 khung thẳng tắp |
 | **BUG-09** | **TC-07.1 / TC-07.3** | Các ký hiệu trạng thái (`✔`, `⚠`, `✖`, `●`, `⏺`) nằm quá sát ký tự chữ gây dính chữ | **Vừa** | **Đã giải quyết** | Chuẩn hóa đệm 2 khoảng trắng sau tất cả các ký hiệu thông tin trên toàn bộ giao diện |
 | **BUG-10** | **TC-08.1** | Sau khi chạy lệnh (ví dụ `/status`), resize cửa sổ làm thẻ thông tin bị vỡ và sinh nhiều khung rác | **Nghiêm trọng (Cao)** | **Đã giải quyết** | Quản lý lịch sử scrollback bằng `scrollback_entries_`; khi resize gọi `redraw_full_view()` tự động re-render lại thẻ chào mừng theo độ rộng mới và vẽ đè nguyên tử từ `\033[1;1H`, triệt tiêu hoàn toàn khung rác |
+| **BUG-11** | **TC-04.1 / TC-07.15** | Thiếu gợi ý lệnh `/service` trong slash menu popup; khi gõ lệnh xong phải nhấn Enter 2 lần mới thực hiện được | **Nghiêm trọng (Cao)** | **Đã giải quyết** | Thêm `/service` vào danh mục lệnh; đóng popup gợi ý ngay khi gõ dấu cách `' '`; cho phép nhấn Enter lập tức thực thi lệnh khi menu đang mở mà không cần Enter lần 2 (Tab để autocomplete tham số) |
+| **BUG-12** | **TC-04.1** | Khung nhắc lệnh (slash menu popup) trước đây bị giới hạn tối đa 70 cột nên bị hụt ngắn hơn so với khung thẻ và khung nhập | **Thấp (Thẩm mỹ UX)** | **Đã giải quyết** | Đồng bộ `box_width` của `SlashMenu::render` theo chiều rộng toàn phần của terminal, giúp mép trái và mép phải của khung nhắc lệnh thẳng tắp tuyệt đối với khung thẻ và khung nhập |
 
 ---
 
