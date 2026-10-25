@@ -27,6 +27,7 @@ add_executable(ldns_tests
     test_session.cpp
     test_peer_manager.cpp
     test_ui.cpp
+
 )
 target_link_libraries(ldns_tests PRIVATE ldns_core ldns_ui doctest::doctest)
 ldns_set_warnings(ldns_tests)
