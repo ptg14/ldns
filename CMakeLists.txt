@@ -81,6 +81,11 @@ add_library(ldns_core STATIC
     src/core/cli/commands.cpp
     src/core/runtime/runtime.cpp
     src/core/core_api.cpp
+    src/core/net/system_dns.cpp
+    src/core/resolver/cache.cpp
+    src/core/resolver/upstream_client.cpp
+    src/core/resolver/query_log.cpp
+    src/core/resolver/pipeline.cpp
 )
 target_include_directories(ldns_core PUBLIC src)
 target_link_libraries(ldns_core PUBLIC

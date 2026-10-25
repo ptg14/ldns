@@ -5,6 +5,7 @@
 #include "core/runtime/runtime.hpp"
 
 #include <filesystem>
+#include <nlohmann/json.hpp>
 
 using namespace ldns;
 
@@ -68,13 +69,32 @@ TEST_CASE("CLI add without targets uses the self address") {
 
     const auto added = cli::add(*api.value(), options);
     // A CI machine with no LAN address has nothing to publish; that is an
-    // error from the caller's point of view, not a crash.
+    // error from the caller's point of view (602: no LAN address, 708: no matching type),
+    // not a crash.
     if (!added) {
-        CHECK(added.error().code == 708);
+        CHECK((added.error().code == 602 || added.error().code == 708));
         return;
     }
     CHECK(added.value().target_kind == "self");
     CHECK_FALSE(added.value().targets.empty());
+}
+
+TEST_CASE("CLI add without targets uses the self address (deterministic pinned)") {
+    TempDir dir;
+    auto opts = options_for(dir);
+    opts.config.network.self_ip = "192.168.1.50";
+    auto api = CoreApi::create(std::move(opts));
+    REQUIRE(api.has_value());
+
+    cli::AddOptions options;
+    options.name = "me.lan";
+    options.targets = {};
+
+    const auto added = cli::add(*api.value(), options);
+    REQUIRE(added.has_value());
+    CHECK(added.value().target_kind == "self");
+    REQUIRE(added.value().targets.size() == 1);
+    CHECK(added.value().targets[0] == "192.168.1.50");
 }
 
 TEST_CASE("CLI set replaces targets and rm removes the record") {
@@ -190,4 +210,58 @@ TEST_CASE("Runtime binds loopback and answers a query from the zone") {
     CHECK(outcome.kind == dns::LookupKind::Answer);
     CHECK(outcome.answers.size() == 1);
     CHECK(outcome.answers[0].ttl == 60);
+}
+
+TEST_CASE("CLI resolve answers local domain") {
+    TempDir dir;
+    auto api = CoreApi::create(options_for(dir));
+    REQUIRE(api.has_value());
+
+    cli::AddOptions add_opt;
+    add_opt.name = "web.lan";
+    add_opt.targets = {"192.168.1.100"};
+    add_opt.force = true;
+    REQUIRE(cli::add(*api.value(), add_opt).has_value());
+
+    std::ostringstream ss;
+    cli::ResolveOptions res_opt;
+    res_opt.name = "web.lan";
+    res_opt.type = "A";
+    auto result = cli::resolve(*api.value(), res_opt, ss);
+    REQUIRE(result.has_value());
+    CHECK(result.value().resolved_step == resolver::ResolutionStep::Local);
+    CHECK(ss.str().find("Resolved via Local") != std::string::npos);
+    CHECK(ss.str().find("192.168.1.100") != std::string::npos);
+}
+
+TEST_CASE("CLI resolve supports --json and --trace") {
+    TempDir dir;
+    auto api = CoreApi::create(options_for(dir));
+    REQUIRE(api.has_value());
+
+    cli::AddOptions add_opt;
+    add_opt.name = "db.lan";
+    add_opt.targets = {"10.0.0.1"};
+    add_opt.force = true;
+    REQUIRE(cli::add(*api.value(), add_opt).has_value());
+
+    std::ostringstream ss;
+    cli::ResolveOptions res_opt;
+    res_opt.name = "db.lan";
+    res_opt.type = "A";
+    res_opt.trace = true;
+    res_opt.json = true;
+    auto result = cli::resolve(*api.value(), res_opt, ss);
+    REQUIRE(result.has_value());
+
+    auto parsed_json = nlohmann::json::parse(ss.str(), nullptr, false);
+    REQUIRE_FALSE(parsed_json.is_discarded());
+    CHECK(parsed_json["qname"] == "db.lan");
+    CHECK(parsed_json["step"] == "Local");
+    CHECK(parsed_json["rcode"] == "NOERROR");
+    REQUIRE(parsed_json["answers"].is_array());
+    CHECK(parsed_json["answers"].size() == 1);
+    CHECK(parsed_json["answers"][0]["data"] == "10.0.0.1");
+    REQUIRE(parsed_json["trace"].is_array());
+    CHECK_FALSE(parsed_json["trace"].empty());
 }

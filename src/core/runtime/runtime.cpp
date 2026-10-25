@@ -147,7 +147,7 @@ Result<void> Runtime::start() {
     config.listen = listen.value();
     config.rate_limit_qps = options_.rate_limit_qps;
 
-    handler_ = std::make_unique<QueryHandler>(api_->zone());
+    handler_ = std::make_unique<QueryHandler>(api_->zone(), HandlerConfig{}, api_->pipeline_shared());
     server_ = std::make_unique<DnsServer>(io_, *handler_, std::move(config));
 
     if (auto status = server_->start(); !status) {
@@ -156,6 +156,12 @@ Result<void> Runtime::start() {
         return Error{321, status.error().message};
     }
     bound_ = server_->bound_addresses();
+
+    // Prevent loop: exclude bound endpoints from upstream queries
+    auto up_cfg = api_->upstream_client().config();
+    up_cfg.excluded_endpoints = bound_;
+    api_->upstream_client().set_config(std::move(up_cfg));
+
     started_ = true;
     return {};
 }

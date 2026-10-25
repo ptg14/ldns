@@ -52,6 +52,7 @@ struct CommandOptions {
     std::string out;
     bool csv{false};
     bool foreground{false};
+    bool trace{false};
 };
 
 // Resolves paths and loads config.toml + LDNS_* environment (SPEC §11
@@ -201,6 +202,17 @@ int run_command(const std::string& command, const GlobalOptions& global,
         return cli::kExitOk;
     }
 
+    if (command == "resolve") {
+        cli::ResolveOptions opt;
+        opt.name = options.name;
+        opt.type = options.type;
+        opt.trace = options.trace;
+        opt.json = options.json;
+        auto result = cli::resolve(core, opt);
+        if (!result) return fail(result.error());
+        return cli::kExitOk;
+    }
+
     std::cerr << "error: unknown command\n";
     return cli::kExitUsage;
 }
@@ -267,6 +279,12 @@ int main(int argc, char** argv) {
     export_cmd->add_flag("--csv", options.csv, "CSV instead of TOML");
     export_cmd->add_flag("--json", options.json, "machine-readable output");
 
+    auto* resolve_cmd = app.add_subcommand("resolve", "resolve a DNS name through the pipeline");
+    resolve_cmd->add_option("name", options.name, "domain name to resolve")->required();
+    resolve_cmd->add_option("type", options.type, "record type (default: A)")->default_val("A");
+    resolve_cmd->add_flag("--trace", options.trace, "print resolution trace hops");
+    resolve_cmd->add_flag("--json", options.json, "machine-readable output");
+
     auto* daemon = app.add_subcommand("daemon", "run the DNS server headless");
     daemon->add_flag("--foreground", options.foreground,
                      "stay in the foreground (required until M8)");
@@ -289,6 +307,7 @@ int main(int argc, char** argv) {
         std::cout << "ldns " << version_string() << '\n'
                   << "the interactive TUI is not built yet; use a command:\n"
                   << "  ldns add app.lan [10.0.0.5] | set | rm | ls | status\n"
+                  << "  ldns resolve google.com [A] [--trace] [--json]\n"
                   << "  ldns import file.toml | export --out file.toml\n"
                   << "  ldns daemon --foreground\n"
                   << "Run `ldns --help` for the full list.\n";

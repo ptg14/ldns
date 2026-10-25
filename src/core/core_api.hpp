@@ -21,6 +21,10 @@
 #include "core/domain/import_export.hpp"
 #include "core/domain/local_zone_sink.hpp"
 #include "core/domain/self_address.hpp"
+#include "core/resolver/cache.hpp"
+#include "core/resolver/pipeline.hpp"
+#include "core/resolver/query_log.hpp"
+#include "core/resolver/upstream_client.hpp"
 #include "core/store/store.hpp"
 #include "core/util/hlc.hpp"
 #include "core/util/result.hpp"
@@ -107,6 +111,16 @@ public:
         service_.set_event_handler(std::move(handler));
     }
 
+    resolver::ResolverPipeline& pipeline() noexcept { return *pipeline_; }
+    std::shared_ptr<resolver::ResolverPipeline> pipeline_shared() const noexcept { return pipeline_; }
+    resolver::DnsCache& cache() noexcept { return *cache_; }
+    resolver::UpstreamClient& upstream_client() noexcept { return *upstream_; }
+    resolver::QueryLog& query_log() noexcept { return *query_log_; }
+
+    Result<resolver::PipelineResult> resolve(std::string_view name,
+                                             std::string_view type = "A",
+                                             bool trace = false);
+
 private:
     CoreApi(Options options, Store store);
     void apply_defaults(domain::AddRequest& request) const;
@@ -126,6 +140,11 @@ private:
 
     // Serializes reloads of the in-memory zone against concurrent writers.
     std::mutex zone_reload_mutex_;
+
+    std::shared_ptr<resolver::DnsCache> cache_;
+    std::shared_ptr<resolver::UpstreamClient> upstream_;
+    std::shared_ptr<resolver::QueryLog> query_log_;
+    std::shared_ptr<resolver::ResolverPipeline> pipeline_;
 };
 
 }  // namespace ldns

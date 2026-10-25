@@ -613,4 +613,16 @@ Result<std::uint16_t> rr_type_from_name(std::string_view name) {
     return Error{130, "unknown RR type"};
 }
 
+std::string_view rcode_name(Rcode code) {
+    switch (code) {
+        case Rcode::NoError: return "NOERROR";
+        case Rcode::FormErr: return "FORMERR";
+        case Rcode::ServFail: return "SERVFAIL";
+        case Rcode::NxDomain: return "NXDOMAIN";
+        case Rcode::NotImp: return "NOTIMP";
+        case Rcode::Refused: return "REFUSED";
+    }
+    return "UNKNOWN";
+}
+
 }  // namespace ldns::dns

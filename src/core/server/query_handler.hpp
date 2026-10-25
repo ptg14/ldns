@@ -8,6 +8,7 @@
 // replace the zone lookup without changing the wire-facing behaviour here.
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <span>
 #include <vector>
@@ -27,7 +28,16 @@ struct QueryContext {
     bool tcp{false};
     // Client's EDNS0 payload size; 512 when the query has no OPT record.
     std::uint16_t udp_payload{512};
+    std::string client_ip;
+
+    QueryContext() = default;
+    QueryContext(bool t, std::uint16_t u = 512, std::string ip = {})
+        : tcp(t), udp_payload(u), client_ip(std::move(ip)) {}
 };
+
+namespace resolver {
+class ResolverPipeline;
+}
 
 struct HandlerResponse {
     dns::Message message;
@@ -36,7 +46,8 @@ struct HandlerResponse {
 
 class QueryHandler {
 public:
-    explicit QueryHandler(const dns::LocalZone& zone, HandlerConfig config = {});
+    explicit QueryHandler(const dns::LocalZone& zone, HandlerConfig config = {},
+                          std::shared_ptr<resolver::ResolverPipeline> pipeline = nullptr);
 
     // Returns nullopt when the packet must be dropped silently (not a query,
     // unparseable, unsupported transport-level rubbish).
@@ -48,6 +59,7 @@ public:
 private:
     const dns::LocalZone& zone_;
     HandlerConfig config_;
+    std::shared_ptr<resolver::ResolverPipeline> pipeline_;
 };
 
 }  // namespace ldns

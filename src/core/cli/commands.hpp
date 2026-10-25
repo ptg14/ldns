@@ -16,13 +16,14 @@
 // 3 daemon unreachable · 4 missing privilege · 5 conflict/already exists.
 
 #include <cstdint>
-#include <iosfwd>
+#include <iostream>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include "core/core_api.hpp"
+#include "core/resolver/pipeline.hpp"
 #include "core/util/result.hpp"
 
 namespace ldns::cli {
@@ -75,5 +76,14 @@ struct ExportOptions {
     bool json{false};
 };
 Result<void> export_zone(CoreApi& api, const ExportOptions& options);
+
+struct ResolveOptions {
+    std::string name;
+    std::string type{"A"};
+    bool trace{false};
+    bool json{false};
+};
+Result<resolver::PipelineResult> resolve(CoreApi& api, const ResolveOptions& options,
+                                         std::ostream& out = std::cout);
 
 }  // namespace ldns::cli

@@ -56,10 +56,14 @@ bool looks_virtual(std::string_view name) {
         if (lowered.starts_with(prefix)) return true;
     }
 #if defined(_WIN32)
-    // Windows adapter descriptions carry these markers rather than names.
-    for (const std::string_view marker : {"vethernet", "hyper-v", "virtualbox", "vmware",
-                                          "loopback", "wsl", "tap-windows", "tailscale",
-                                          "zerotier", "wireguard"}) {
+    // Windows host-side virtual switches and tunnels carry these markers.
+    // Notice: we match "hyper-v virtual", "virtualbox host-only", and "vmware virtual"
+    // rather than generic "hyper-v" or "vmware" so that guest VMs running inside
+    // Hyper-V/Azure ("Microsoft Hyper-V Network Adapter") or VMware are not misclassified
+    // as host virtual switches.
+    for (const std::string_view marker : {"vethernet", "hyper-v virtual", "virtualbox host-only",
+                                          "vmware virtual", "loopback", "wsl", "tap-windows",
+                                          "tailscale", "zerotier", "wireguard"}) {
         if (lowered.find(std::string(marker)) != std::string::npos) return true;
     }
 #endif

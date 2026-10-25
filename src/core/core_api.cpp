@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "core/domain/import_export.hpp"
+#include "core/net/system_dns.hpp"
 #include "core/util/logger.hpp"
 
 namespace ldns {
@@ -99,7 +100,75 @@ Result<std::unique_ptr<CoreApi>> CoreApi::create(Options options) {
         logger()->warn("{}", addresses.error().message);
     }
 
+    // Initialize cache
+    api->cache_ = std::make_shared<resolver::DnsCache>(api->options_.config.cache.max_entries);
+
+    // Initialize query log
+    api->query_log_ = std::make_shared<resolver::QueryLog>(10000);
+
+    // Initialize upstream client
+    resolver::UpstreamConfig up_cfg;
+    up_cfg.servers = api->options_.config.upstream.servers;
+    up_cfg.fallback = api->options_.config.upstream.fallback;
+    up_cfg.timeout_ms = api->options_.config.upstream.timeout_ms;
+    up_cfg.retries = api->options_.config.upstream.retries;
+
+    bool has_auto = false;
+    std::vector<std::string> expanded_servers;
+    for (const auto& s : up_cfg.servers) {
+        if (s == "auto") {
+            has_auto = true;
+        } else {
+            expanded_servers.push_back(s);
+        }
+    }
+    if (has_auto) {
+        auto sys_dns = net::detect_system_dns();
+        if (sys_dns && !sys_dns.value().servers.empty()) {
+            for (const auto& s : sys_dns.value().servers) {
+                expanded_servers.push_back(s);
+            }
+        } else {
+            for (const auto& s : up_cfg.fallback) {
+                expanded_servers.push_back(s);
+            }
+        }
+    }
+    up_cfg.servers = std::move(expanded_servers);
+    api->upstream_ = std::make_shared<resolver::UpstreamClient>(std::move(up_cfg));
+
+    // Initialize pipeline
+    resolver::PipelineConfig pipe_cfg;
+    pipe_cfg.peer_ttl_cap = api->options_.config.cache.peer_ttl_cap;
+    pipe_cfg.upstream_ttl_cap = api->options_.config.cache.upstream_ttl_cap;
+    pipe_cfg.negative_ttl = api->options_.config.cache.negative_ttl;
+
+    api->pipeline_ = std::make_shared<resolver::ResolverPipeline>(
+        api->zone_, api->cache_, api->upstream_, api->query_log_, pipe_cfg);
+
     return api;
+}
+
+Result<resolver::PipelineResult> CoreApi::resolve(std::string_view name_str,
+                                                  std::string_view type_str,
+                                                  bool trace) {
+    auto parsed_name = dns::Name::from_presentation(name_str);
+    if (!parsed_name) return parsed_name.error();
+
+    std::string upper_type(type_str);
+    std::transform(upper_type.begin(), upper_type.end(), upper_type.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+
+    auto parsed_type = dns::rr_type_from_name(upper_type);
+    if (!parsed_type) return parsed_type.error();
+
+    dns::Message query;
+    query.id = 0x1234;
+    query.flags = dns::kRd;
+    query.questions.push_back(
+        dns::Question{parsed_name.value(), parsed_type.value(), dns::kClassIn});
+
+    return pipeline_->resolve(query, {}, trace);
 }
 
 Result<domain::DomainEntry> CoreApi::add_domain(domain::AddRequest request) {
