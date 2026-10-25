@@ -46,6 +46,8 @@
 
 ## 5. Nhật ký làm việc — `process.md`
 
+> Xem thêm §6: phân chia hai nhánh (`main` = CLI/chức năng, `feat/ux-ui` = TUI).
+
 - Cập nhật `process.md` khi: **bắt đầu** phiên/công việc, **kết thúc**, và tại **các bước quan trọng** (hoàn thành milestone, thay đổi thiết kế, phát hiện bug/lỗ hổng).
 - Mỗi mục ghi: thời điểm, việc đã làm, file liên quan, điều cần chú ý, bug/lỗ hổng phát hiện (kèm mức độ), việc tiếp theo.
 - Ghi ngắn gọn, có thể tra cứu; không thay thế commit message hay tài liệu thiết kế.
@@ -60,3 +62,23 @@
 - Bug/lỗ hổng: ... (mức độ: thấp/trung bình/cao)
 - Tiếp theo: ...
 ```
+
+---
+
+## 6. Hai nhánh phát triển song song
+
+Repo có **hai nhánh** với mục đích tách biệt. Không trộn công việc của nhánh này sang nhánh kia.
+
+| Nhánh | Worktree | Phạm vi | Cách chạy phần mềm |
+|---|---|---|---|
+| `main` | `C:/Code/Ldns` | **Chức năng chính**: core (DNS, store, domain, resolver, peer, sync…), CLI, service | **CLI**: `ldns <lệnh>` một lần, `ldns daemon --foreground` |
+| `feat/ux-ui` | `C:/Code/Ldns-ui` | **TUI / UX / UI**: `src/ui/**` (`term/`, `widgets/`, `commands/`), `docs/UI-SPEC.md`, test TUI | **TUI**: `ldns` (không tham số) mở giao diện toàn màn hình inline |
+
+Quy tắc:
+
+- Trên `main`: **không** phát triển TUI/UX. `ldns` không có tham số chỉ in hướng dẫn CLI (trạng thái hiện tại của `src/main.cpp`). Mọi thứ chạy được, kiểm thử được bằng lệnh CLI + `dig`/client DNS.
+- Trên `feat/ux-ui`: giao diện là trọng tâm; nhưng **vẫn phải gọi qua `CoreApi`** (CLAUDE.md §0 nguyên tắc SPEC §4) — không viết logic core mới trong nhánh UI.
+- Không sửa file của nhánh kia từ worktree này. Cụ thể, khi đang ở `main` **không** sửa `src/ui/**`, `tests/test_ui.cpp`, `docs/UI-SPEC.md`.
+- Thay đổi core/CLI cần cho UI phải làm trên `main` trước, rồi merge/cherry-pick sang `feat/ux-ui`; không sửa core trong nhánh UI để tránh hai bản lệch nhau.
+- Khi mô tả/nghiệm thu công việc, nói rõ nhánh và cách chạy tương ứng (CLI hay TUI).
+- Nhật ký `process.md` cho `main` và nhật ký `process-ui.md` cho `feat/ux-ui`

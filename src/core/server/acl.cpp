@@ -173,6 +173,15 @@ void RateLimiter::prune_locked(std::int64_t now_ns) {
             ++it;
         }
     }
+    // Drop order entries whose bucket pruned, so the list stays bounded and
+    // never points at a key that a later insert re-created.
+    for (auto it = created_order_.begin(); it != created_order_.end();) {
+        if (buckets_.find(*it) == buckets_.end()) {
+            it = created_order_.erase(it);
+        } else {
+            ++it;
+        }
+    }
 }
 
 bool RateLimiter::allow(const IpAddress& source, std::int64_t now_ns) {
@@ -181,14 +190,27 @@ bool RateLimiter::allow(const IpAddress& source, std::int64_t now_ns) {
 
     auto it = buckets_.find(key);
     if (it == buckets_.end()) {
-        // Pruning is O(n), so it runs at most once per 1024 new sources. At
-        // the hard cap, new sources are refused until a prune frees space.
+        // Pruning is O(n), so it runs at most once per 1024 new sources. A
+        // full table must never trigger it per insert: under a source flood
+        // that turns every packet into a full-table scan.
         if (++inserts_since_prune_ >= 1024) {
             prune_locked(now_ns);
             inserts_since_prune_ = 0;
         }
-        if (buckets_.size() >= kMaxTrackedSources) return false;
+        if (buckets_.size() >= kMaxTrackedSources) {
+            // Still full: every tracked source queried recently. Refusing new
+            // sources here would let a spoofed-source flood lock every honest
+            // client out of the server indefinitely, so evict one instead.
+            // The eviction order is least-recently-created via a deque, which
+            // is O(1); queries do not refresh it, so the hot path pays only a
+            // push_back per new source.
+            if (!created_order_.empty()) {
+                buckets_.erase(created_order_.front());
+                created_order_.pop_front();
+            }
+        }
         it = buckets_.emplace(key, Bucket{}).first;
+        created_order_.push_back(key);
     }
     auto& bucket = it->second;
     if (!bucket.initialized) {
@@ -212,6 +234,7 @@ bool RateLimiter::allow(const IpAddress& source, std::int64_t now_ns) {
 void RateLimiter::clear() {
     std::lock_guard lock(mutex_);
     buckets_.clear();
+    created_order_.clear();
     inserts_since_prune_ = 0;
 }
 

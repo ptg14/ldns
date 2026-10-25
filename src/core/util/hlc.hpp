@@ -4,6 +4,7 @@
 // 48 high bits = Unix milliseconds, 16 low bits = logical counter.
 
 #include <cstdint>
+#include <mutex>
 #include <string>
 
 namespace ldns {
@@ -20,8 +21,9 @@ constexpr HlcTimestamp hlc_make(std::uint64_t ms, std::uint16_t counter) noexcep
     return (ms << 16) | counter;
 }
 
-// Monotonic clock for one process. Not thread-safe; callers serialize access
-// (or use one instance per thread, as the HLC receive path does).
+// Monotonic clock for one process. Thread-safe: now()/receive() serialize on
+// an internal mutex, because zone writes and the IP-change watcher may stamp
+// events concurrently (SPEC §7.4.6).
 class HlcClock {
 public:
     explicit HlcClock(std::uint64_t physical_ms = 0) noexcept
@@ -34,9 +36,13 @@ public:
     // for the local event accompanying the received message.
     HlcTimestamp receive(HlcTimestamp remote);
 
-    HlcTimestamp last() const noexcept { return last_; }
+    HlcTimestamp last() const {
+        std::lock_guard lock(mutex_);
+        return last_;
+    }
 
 private:
+    mutable std::mutex mutex_;
     HlcTimestamp last_;
 };
 

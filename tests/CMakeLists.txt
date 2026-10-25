@@ -11,8 +11,18 @@ add_executable(ldns_tests
     test_acl.cpp
     test_query_handler.cpp
     test_dns_server.cpp
+    test_store.cpp
+    test_config.cpp
+    test_domain_service.cpp
+    test_core_api.cpp
+    test_cli.cpp
 )
 target_link_libraries(ldns_tests PRIVATE ldns_core doctest::doctest)
 ldns_set_warnings(ldns_tests)
 
 add_test(NAME ldns_tests COMMAND ldns_tests)
+
+# Manual M2 benchmark (not part of ctest): 100k-row import and reopen time.
+add_executable(ldns_bench_import bench_import.cpp)
+target_link_libraries(ldns_bench_import PRIVATE ldns_core)
+ldns_set_warnings(ldns_bench_import)

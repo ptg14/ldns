@@ -333,8 +333,19 @@ private:
         auto self = shared_from_this();
         acceptor_.async_accept([self](const asio::error_code& ec, tcp::socket socket) {
             if (!ec) {
-                const IpAddress peer = from_asio_address(
-                    socket.remote_endpoint().address());
+                // remote_endpoint() without an error_code throws when the peer
+                // already reset the connection (port scans, health checks).
+                // An exception escaping this handler would terminate the
+                // process, so take the error_code overload and drop the socket.
+                asio::error_code endpoint_ec;
+                const auto remote = socket.remote_endpoint(endpoint_ec);
+                if (endpoint_ec) {
+                    asio::error_code ignored;
+                    socket.close(ignored);
+                    self->accept();
+                    return;
+                }
+                const IpAddress peer = from_asio_address(remote.address());
                 if (self->sessions_ < self->owner_.config_.max_tcp_connections) {
                     ++self->sessions_;
                     std::weak_ptr<TcpListener> weak = self;

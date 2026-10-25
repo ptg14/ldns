@@ -112,7 +112,9 @@ std::optional<HandlerResponse> QueryHandler::handle(std::span<const std::uint8_t
             ResourceRecord cname;
             cname.name = current;
             cname.type = type_of(RrType::CNAME);
-            cname.ttl = kDefaultTtl;
+            // Keep the TTL the owner configured for the CNAME (SPEC §5.2);
+            // only fall back when the zone record carries none.
+            cname.ttl = outcome.cname_ttl != 0 ? outcome.cname_ttl : kDefaultTtl;
             auto rdata = dns::encode_rdata_name(*outcome.cname_target);
             if (!rdata) break;
             cname.rdata = rdata.value();
