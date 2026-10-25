@@ -46,6 +46,9 @@ find_package(spdlog CONFIG REQUIRED)
 find_package(CLI11 CONFIG REQUIRED)
 find_package(doctest CONFIG REQUIRED)
 find_package(asio CONFIG REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
+find_package(unofficial-sqlite3 CONFIG REQUIRED)
+find_package(tomlplusplus CONFIG REQUIRED)
 
 # Asio is header-only; ASIO_NO_DEPRECATED keeps us on the modern API.
 add_library(ldns_asio INTERFACE)
@@ -59,6 +62,7 @@ add_library(ldns_core STATIC
     src/core/dns/name.cpp
     src/core/dns/message.cpp
     src/core/dns/local_zone.cpp
+    src/core/net/interfaces.cpp
     src/core/server/acl.cpp
     src/core/server/query_handler.cpp
     src/core/server/dns_server.cpp
@@ -66,9 +70,30 @@ add_library(ldns_core STATIC
     src/core/util/id.cpp
     src/core/util/hlc.cpp
     src/core/version.cpp
+    src/core/store/store.cpp
+    src/core/store/migrations.cpp
+    src/core/config/config.cpp
+    src/core/config/paths.cpp
+    src/core/domain/self_address.cpp
+    src/core/domain/public_tlds.cpp
+    src/core/domain/domain_service.cpp
+    src/core/domain/import_export.cpp
+    src/core/cli/commands.cpp
+    src/core/runtime/runtime.cpp
+    src/core/core_api.cpp
 )
 target_include_directories(ldns_core PUBLIC src)
-target_link_libraries(ldns_core PUBLIC spdlog::spdlog ldns_asio)
+target_link_libraries(ldns_core PUBLIC
+    spdlog::spdlog
+    ldns_asio
+    nlohmann_json::nlohmann_json
+    unofficial::sqlite3::sqlite3
+    tomlplusplus::tomlplusplus
+)
+if(WIN32)
+    # GetAdaptersAddresses (core/net/interfaces.cpp).
+    target_link_libraries(ldns_core PUBLIC iphlpapi ws2_32)
+endif()
 target_compile_definitions(ldns_core PUBLIC LDNS_VERSION="${PROJECT_VERSION}")
 ldns_set_warnings(ldns_core)
 

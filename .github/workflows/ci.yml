@@ -4,13 +4,14 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
+# Cancel superseded PR runs, but let every push to main produce a complete CI
+# record (cancelling on main hides results for commits that were pushed in
+# quick succession).
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
-env:
-  VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   linux:
@@ -21,13 +22,7 @@ jobs:
       matrix:
         preset: [linux-debug, linux-asan]
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/github-script@v7
-        with:
-          script: |
-            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
-            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+      - uses: actions/checkout@v7
 
       # Always clone our own vcpkg: the preinstalled one on the runner may not
       # contain the commit named by vcpkg.json's builtin-baseline, which fails
@@ -54,27 +49,49 @@ jobs:
 
   windows:
     name: Windows (${{ matrix.preset }})
+    # windows-latest currently maps to the VS 2026 image, which has no
+    # "Visual Studio 17 2022" generator. The windows-ci preset uses Ninja with
+    # whichever MSVC environment msvc-dev-cmd activates, so it does not depend
+    # on the installed Visual Studio version.
     runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
-        preset: [windows-msvc-debug]
+        preset: [windows-ci]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/github-script@v7
-        with:
-          script: |
-            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
-            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
-
-      # See the Linux job: clone vcpkg so builtin-baseline always resolves.
       - name: Set up vcpkg
         shell: pwsh
         run: |
           git clone https://github.com/microsoft/vcpkg.git "$env:RUNNER_TEMP/vcpkg"
           & "$env:RUNNER_TEMP/vcpkg/bootstrap-vcpkg.bat" -disableMetrics
           "VCPKG_ROOT=$env:RUNNER_TEMP/vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756  # v1.13.0
+        with:
+          arch: x64
+
+      - name: Set up Ninja
+        shell: pwsh
+        run: |
+          $ninja = Get-ChildItem "$env:ProgramFiles\Microsoft Visual Studio" -Filter ninja.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($ninja) {
+            Split-Path $ninja.FullName | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          } else {
+            choco install ninja -y --no-progress
+            "C:\ProgramData\chocolatey\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+            $env:Path += ";C:\ProgramData\chocolatey\bin"
+          }
+          ninja --version
+
+      - name: Report toolchain
+        shell: pwsh
+        run: |
+          cmake --version
+          ninja --version
+          cl 2>&1 | Select-Object -First 1
 
       - name: Configure
         run: cmake --preset ${{ matrix.preset }}

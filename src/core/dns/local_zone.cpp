@@ -128,13 +128,13 @@ std::vector<ResourceRecord> LocalZone::make_answers(const Name& owner, const Typ
     return out;
 }
 
-std::optional<Name> LocalZone::cname_of(const TypeMap& types) {
+std::optional<LocalZone::CnameRecord> LocalZone::cname_of(const TypeMap& types) {
     const auto it = types.find(static_cast<std::uint16_t>(RrType::CNAME));
     if (it == types.end() || it->second.data.empty()) return std::nullopt;
     std::size_t offset = 0;
     auto target = Name::from_wire(it->second.data.front(), offset);
     if (!target) return std::nullopt;
-    return target.value();
+    return CnameRecord{std::move(target.value()), it->second.ttl};
 }
 
 LookupOutcome LocalZone::lookup(const Name& name, std::uint16_t qtype) const {
@@ -146,7 +146,7 @@ LookupOutcome LocalZone::lookup(const Name& name, std::uint16_t qtype) const {
         auto answers = make_answers(name, exact->second, qtype);
         if (!answers.empty()) return LookupOutcome{LookupKind::Answer, std::move(answers), {}};
         if (const auto cname = cname_of(exact->second)) {
-            return LookupOutcome{LookupKind::Cname, {}, cname};
+            return LookupOutcome{LookupKind::Cname, {}, cname->target, cname->ttl};
         }
         return LookupOutcome{LookupKind::NoData, {}, {}};
     }
@@ -161,7 +161,7 @@ LookupOutcome LocalZone::lookup(const Name& name, std::uint16_t qtype) const {
         auto answers = make_answers(name, it->second, qtype);
         if (!answers.empty()) return LookupOutcome{LookupKind::Answer, std::move(answers), {}};
         if (const auto cname = cname_of(it->second)) {
-            return LookupOutcome{LookupKind::Cname, {}, cname};
+            return LookupOutcome{LookupKind::Cname, {}, cname->target, cname->ttl};
         }
         return LookupOutcome{LookupKind::NoData, {}, {}};
     }

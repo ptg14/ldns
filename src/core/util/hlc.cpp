@@ -15,6 +15,7 @@ std::uint64_t wall_clock_ms() {
 }  // namespace
 
 HlcTimestamp HlcClock::now() {
+    std::lock_guard lock(mutex_);
     const std::uint64_t physical = wall_clock_ms();
     const std::uint64_t last_physical = hlc_physical_ms(last_);
 
@@ -39,6 +40,7 @@ HlcTimestamp bump_counter(std::uint64_t physical, std::uint32_t counter) {
 }  // namespace
 
 HlcTimestamp HlcClock::receive(HlcTimestamp remote) {
+    std::lock_guard lock(mutex_);
     // Standard HLC merge (Kulkarni et al.): l' = max(l, l_m, pt), then the
     // counter is taken from whichever source supplied l'.
     const std::uint64_t physical = wall_clock_ms();

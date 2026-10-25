@@ -58,6 +58,7 @@ Result<std::vector<std::uint8_t>> parse_presentation(std::string_view text, bool
             auto puny = punycode_encode(lowered);
             if (!puny) return puny.error();
             encoded = "xn--" + puny.value();
+            std::transform(encoded.begin(), encoded.end(), encoded.begin(), to_lower);
         } else {
             encoded.assign(label.begin(), label.end());
             std::transform(encoded.begin(), encoded.end(), encoded.begin(), to_lower);
@@ -258,6 +259,21 @@ Name Name::parent() const {
 
 bool Name::is_suffix_of(const Name& other) const noexcept {
     if (wire_.size() > other.wire_.size()) return false;
+    const std::size_t target = other.wire_.size() - wire_.size();
+
+    // A raw byte-suffix match is not enough: a label's length byte (1..63)
+    // is itself a byte that can appear inside a label ('-' is 45, '0'..'9'
+    // are 48..57). Without this check "a*48" would look like a suffix of
+    // "x0a*48" because the inner '0' happens to equal the length byte.
+    // The match must start exactly on a label boundary of `other`.
+    std::size_t cursor = 0;
+    while (cursor < other.wire_.size() && other.wire_[cursor] != 0) {
+        if (cursor == target) break;
+        if (cursor > target) return false;
+        cursor += 1 + static_cast<std::size_t>(other.wire_[cursor]);
+    }
+    if (cursor != target) return false;
+
     return std::equal(wire_.begin(), wire_.end(),
                       other.wire_.end() - static_cast<std::ptrdiff_t>(wire_.size()));
 }
@@ -305,18 +321,22 @@ Result<std::vector<std::uint32_t>> decode_utf8(std::string_view text) {
         const auto lead = static_cast<unsigned char>(text[i]);
         std::uint32_t cp = 0;
         std::size_t extra = 0;
+        std::uint32_t min_cp = 0;
         if (lead < 0x80) {
             cp = lead;
             extra = 0;
-        } else if ((lead & 0xE0) == 0xC0) {
+        } else if (lead >= 0xC2 && lead <= 0xDF) {
             cp = lead & 0x1F;
             extra = 1;
+            min_cp = 0x80;
         } else if ((lead & 0xF0) == 0xE0) {
             cp = lead & 0x0F;
             extra = 2;
-        } else if ((lead & 0xF8) == 0xF0) {
+            min_cp = 0x800;
+        } else if (lead >= 0xF0 && lead <= 0xF4) {
             cp = lead & 0x07;
             extra = 3;
+            min_cp = 0x10000;
         } else {
             return Error{30, "invalid UTF-8 lead byte"};
         }
@@ -330,7 +350,7 @@ Result<std::vector<std::uint32_t>> decode_utf8(std::string_view text) {
             }
             cp = (cp << 6) | (cont & 0x3F);
         }
-        if (cp > kMaxCodePoint) {
+        if (cp < min_cp || (cp >= 0xD800 && cp <= 0xDFFF) || cp > kMaxCodePoint) {
             return Error{33, "code point out of range"};
         }
         out.push_back(cp);

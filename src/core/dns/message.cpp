@@ -261,6 +261,19 @@ Result<Message> Message::parse(std::span<const std::uint8_t> packet) {
 }
 
 Result<std::vector<std::uint8_t>> Message::encode(std::size_t max_size) const {
+    // Section counts are 16-bit on the wire. Truncating with static_cast would
+    // emit a header that disagrees with the body, producing a packet no parser
+    // can read. Refuse instead of corrupting.
+    std::size_t extra = 0;
+    for (const auto& rr : additional) {
+        if (!rr.is_opt()) ++extra;
+    }
+    if (edns) ++extra;
+    if (questions.size() > 0xFFFF || answers.size() > 0xFFFF ||
+        authority.size() > 0xFFFF || extra > 0xFFFF) {
+        return Error{101, "record count exceeds the 16-bit DNS wire limit"};
+    }
+
     std::vector<std::uint8_t> out;
     out.reserve(std::min<std::size_t>(max_size, 4096));
 

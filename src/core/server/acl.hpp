@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -98,6 +99,10 @@ private:
     std::uint32_t burst_;
     mutable std::mutex mutex_;
     std::unordered_map<std::string, Bucket> buckets_;
+    // Keys in creation order, so a full table can evict in O(1). Without this
+    // a spoofed-source flood filling the table would make every new client
+    // wait for a prune, and refuse it outright when nothing is prunable.
+    std::deque<std::string> created_order_;
     // Number of new sources since the last prune; bounds prune cost.
     std::size_t inserts_since_prune_{0};
 };

@@ -42,6 +42,9 @@ struct LookupOutcome {
     LookupKind kind{LookupKind::NxDomain};
     std::vector<ResourceRecord> answers;
     std::optional<Name> cname_target;
+    // TTL of the CNAME RRset the target came from, so the answer keeps the
+    // TTL the owner configured instead of an invented default (SPEC §5.2).
+    std::uint32_t cname_ttl{};
 };
 
 class LocalZone {
@@ -94,7 +97,12 @@ private:
 
     static std::vector<ResourceRecord> make_answers(const Name& owner, const TypeMap& types,
                                                     std::uint16_t type);
-    static std::optional<Name> cname_of(const TypeMap& types);
+    // Extracts the CNAME target and its TTL; nullopt when absent or invalid.
+    struct CnameRecord {
+        Name target;
+        std::uint32_t ttl{};
+    };
+    static std::optional<CnameRecord> cname_of(const TypeMap& types);
     std::size_t record_count_unlocked() const;
 
     mutable std::shared_mutex mutex_;
