@@ -16,13 +16,14 @@
 // 3 daemon unreachable · 4 missing privilege · 5 conflict/already exists.
 
 #include <cstdint>
-#include <iosfwd>
+#include <iostream>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include "core/core_api.hpp"
+#include "core/resolver/pipeline.hpp"
 #include "core/util/result.hpp"
 
 namespace ldns::cli {
@@ -75,5 +76,41 @@ struct ExportOptions {
     bool json{false};
 };
 Result<void> export_zone(CoreApi& api, const ExportOptions& options);
+
+struct ResolveOptions {
+    std::string name;
+    std::string type{"A"};
+    bool trace{false};
+    bool json{false};
+};
+Result<resolver::PipelineResult> resolve(CoreApi& api, const ResolveOptions& options,
+                                         std::ostream& out = std::cout);
+
+struct PeersOptions {
+    bool json{false};
+};
+Result<std::vector<StoredPeer>> peers(CoreApi& api, const PeersOptions& options,
+                                      std::ostream& out = std::cout);
+
+struct PeerAddOptions {
+    std::string endpoint;
+    bool json{false};
+};
+Result<void> peer_add(CoreApi& api, const PeerAddOptions& options,
+                      std::ostream& out = std::cout);
+
+struct PeerRmOptions {
+    std::string endpoint;
+    bool json{false};
+};
+Result<void> peer_rm(CoreApi& api, const PeerRmOptions& options,
+                     std::ostream& out = std::cout);
+
+struct PeerForgetOptions {
+    std::string node;
+    bool json{false};
+};
+Result<void> peer_forget(CoreApi& api, const PeerForgetOptions& options,
+                         std::ostream& out = std::cout);
 
 }  // namespace ldns::cli

@@ -53,6 +53,7 @@ struct CommandOptions {
     std::string out;
     bool csv{false};
     bool foreground{false};
+    bool trace{false};
 };
 
 // Resolves paths and loads config.toml + LDNS_* environment (SPEC §11
@@ -138,7 +139,8 @@ Result<std::unique_ptr<CoreApi>> open_api(const GlobalOptions& global) {
 }
 
 int run_command(const std::string& command, const GlobalOptions& global,
-                const CommandOptions& options, const std::string& list_type) {
+                const CommandOptions& options, const std::string& list_type,
+                const std::string& peer_subaction = "") {
     auto api = open_api(global);
     if (!api) return fail(api.error());
     CoreApi& core = *api.value();
@@ -202,6 +204,51 @@ int run_command(const std::string& command, const GlobalOptions& global,
         return cli::kExitOk;
     }
 
+    if (command == "resolve") {
+        cli::ResolveOptions opt;
+        opt.name = options.name;
+        opt.type = options.type;
+        opt.trace = options.trace;
+        opt.json = options.json;
+        auto result = cli::resolve(core, opt);
+        if (!result) return fail(result.error());
+        return cli::kExitOk;
+    }
+
+    if (command == "peers") {
+        cli::PeersOptions opt;
+        opt.json = options.json;
+        auto result = cli::peers(core, opt);
+        if (!result) return fail(result.error());
+        return cli::kExitOk;
+    }
+
+    if (command == "peer") {
+        if (peer_subaction == "add") {
+            cli::PeerAddOptions opt;
+            opt.endpoint = options.name;
+            opt.json = options.json;
+            auto result = cli::peer_add(core, opt);
+            if (!result) return fail(result.error());
+            return cli::kExitOk;
+        }
+        if (peer_subaction == "rm") {
+            cli::PeerRmOptions opt;
+            opt.endpoint = options.name;
+            opt.json = options.json;
+            auto result = cli::peer_rm(core, opt);
+            if (!result) return fail(result.error());
+            return cli::kExitOk;
+        }
+        if (peer_subaction == "forget") {
+            cli::PeerForgetOptions opt;
+            opt.node = options.name;
+            opt.json = options.json;
+            auto result = cli::peer_forget(core, opt);
+            if (!result) return fail(result.error());
+            return cli::kExitOk;
+        }
+    }
     std::cerr << "error: unknown command\n";
     return cli::kExitUsage;
 }
@@ -209,8 +256,12 @@ int run_command(const std::string& command, const GlobalOptions& global,
 }  // namespace
 
 #if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #include <windows.h>
 #endif
 
@@ -282,6 +333,29 @@ int main(int argc, char** argv) {
     export_cmd->add_flag("--csv", options.csv, "CSV instead of TOML");
     export_cmd->add_flag("--json", options.json, "machine-readable output");
 
+    auto* resolve_cmd = app.add_subcommand("resolve", "resolve a DNS name through the pipeline");
+    resolve_cmd->add_option("name", options.name, "domain name to resolve")->required();
+    resolve_cmd->add_option("type", options.type, "record type (default: A)")->default_val("A");
+    resolve_cmd->add_flag("--trace", options.trace, "print resolution trace hops");
+    resolve_cmd->add_flag("--json", options.json, "machine-readable output");
+
+    auto* peers_cmd = app.add_subcommand("peers", "list discovered and manual peers");
+    peers_cmd->add_flag("--json", options.json, "machine-readable output");
+
+    auto* peer_cmd = app.add_subcommand("peer", "manage peers (add, rm, forget)");
+    peer_cmd->require_subcommand(1, 1);
+
+    auto* peer_add_cmd = peer_cmd->add_subcommand("add", "add a manual peer (ip[:port])");
+    peer_add_cmd->add_option("endpoint", options.name, "peer endpoint (ip[:port])")->required();
+    peer_add_cmd->add_flag("--json", options.json, "machine-readable output");
+
+    auto* peer_rm_cmd = peer_cmd->add_subcommand("rm", "remove a manual peer");
+    peer_rm_cmd->add_option("endpoint", options.name, "peer endpoint (ip[:port])")->required();
+    peer_rm_cmd->add_flag("--json", options.json, "machine-readable output");
+
+    auto* peer_forget_cmd = peer_cmd->add_subcommand("forget", "remove a peer from stored registry");
+    peer_forget_cmd->add_option("node", options.name, "peer node ID or prefix")->required();
+    peer_forget_cmd->add_flag("--json", options.json, "machine-readable output");
     auto* daemon = app.add_subcommand("daemon", "run the DNS server headless");
     daemon->add_flag("--foreground", options.foreground,
                      "stay in the foreground (required until M8)");
@@ -298,10 +372,16 @@ int main(int argc, char** argv) {
                                     ? std::string()
                                     : app.get_subcommands().front()->get_name();
 
+
     ldns::init_logger(global.log_level);
 
+    std::string peer_subaction;
+    if (command == "peer" && !peer_cmd->get_subcommands().empty()) {
+        peer_subaction = peer_cmd->get_subcommands().front()->get_name();
+    }
+
     if (command == "daemon") return run_daemon(global, options.foreground);
-    if (!command.empty()) return run_command(command, global, options, list_type);
+    if (!command.empty()) return run_command(command, global, options, list_type, peer_subaction);
 
     if (headless) {
         ldns::logger()->info("ldns {} - running headless", ldns::version_string());
@@ -309,6 +389,13 @@ int main(int argc, char** argv) {
     }
 
     // Launch interactive Claude Code style TUI
-    ldns::ui::TuiApp tui;
+    auto api = open_api(global);
+    std::unique_ptr<CoreApi> core;
+    if (api) {
+        core = std::move(api.value());
+    } else {
+        ldns::logger()->warn("Opening TUI with mock fallback: {}", api.error().message);
+    }
+    ldns::ui::TuiApp tui(std::move(core));
     return tui.run();
 }

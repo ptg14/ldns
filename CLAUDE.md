@@ -46,15 +46,9 @@
 
 ## 5. Nhật ký làm việc — `process.md` & `process-ui.md`
 
-<<<<<<< HEAD
 - Với công việc Core / Backend / Giao thức / CI: cập nhật vào `process.md`.
 - **Với công việc UX / UI:** tuyệt đối **không ghi vào `process.md`** mà ghi riêng vào `process-ui.md` để tránh xung đột git giữa các luồng làm việc.
-- Cập nhật nhật ký khi: **bắt đầu** phiên/công việc, **kết thúc**, và tại **các bước quan trọng** (thay đổi thiết kế, sửa bug, hoàn thành nhóm chức năng).
-=======
-> Xem thêm §6: phân chia hai nhánh (`main` = CLI/chức năng, `feat/ux-ui` = TUI).
-
-- Cập nhật `process.md` khi: **bắt đầu** phiên/công việc, **kết thúc**, và tại **các bước quan trọng** (hoàn thành milestone, thay đổi thiết kế, phát hiện bug/lỗ hổng).
->>>>>>> main
+- Cập nhật nhật ký khi: **bắt đầu** phiên/công việc, **kết thúc**, và tại **các bước quan trọng** (hoàn thành milestone, thay đổi thiết kế, phát hiện bug/lỗ hổng, sửa bug/ lỗ hổng).
 - Mỗi mục ghi: thời điểm, việc đã làm, file liên quan, điều cần chú ý, bug/lỗ hổng phát hiện (kèm mức độ), việc tiếp theo.
 - Ghi ngắn gọn, có thể tra cứu; không thay thế commit message hay tài liệu thiết kế.
 
@@ -69,9 +63,6 @@
 - Tiếp theo: ...
 ```
 
----
-
-<<<<<<< HEAD
 ## 6. Quy tắc riêng cho phân hệ UX / UI
 
 1. **Phạm vi chuyên biệt:** Chỉ tập trung vào thiết kế và triển khai UX/UI (inline TUI, widgets, tương tác terminal, hiển thị bảng màu, phím tắt). **Không can thiệp quá sâu vào logic vận hành core** (DNS server, SQLite store, resolver pipeline, giao thức đồng bộ peer).
@@ -79,8 +70,8 @@
 3. **Quy trình báo cáo kèm danh mục Test (User là Tester):** Mỗi khi báo cáo kết quả phải đi kèm **checklist kiểm thử UX/UI chi tiết** (duy trì tại `docs/UI_CHECKLIST.md` và `docs/UI-SPEC.md`) để người dùng trực tiếp tự kiểm thử trong vai trò tester.
 4. **Nhật ký phân hệ UI tách biệt:** Toàn bộ lịch sử tiến độ, phân tích lỗi giao diện và cập nhật khắc phục của phân hệ UI được ghi vào `process-ui.md`, không ghi vào `process.md`.
 5. **Theo dõi lỗi giao diện:** Các lỗi phát hiện trong quá trình test UX/UI phải được ghi nhận và theo dõi trạng thái cụ thể trong bảng Bug Tracker của `docs/UI_CHECKLIST.md`.
-=======
-## 6. Hai nhánh phát triển song song
+
+## 7. Hai nhánh phát triển song song
 
 Repo có **hai nhánh** với mục đích tách biệt. Không trộn công việc của nhánh này sang nhánh kia.
 
@@ -97,4 +88,5 @@ Quy tắc:
 - Thay đổi core/CLI cần cho UI phải làm trên `main` trước, rồi merge/cherry-pick sang `feat/ux-ui`; không sửa core trong nhánh UI để tránh hai bản lệch nhau.
 - Khi mô tả/nghiệm thu công việc, nói rõ nhánh và cách chạy tương ứng (CLI hay TUI).
 - Nhật ký `process.md` cho `main` và nhật ký `process-ui.md` cho `feat/ux-ui`
->>>>>>> main
+
+---

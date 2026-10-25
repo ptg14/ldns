@@ -15,6 +15,8 @@ SlashMenu::SlashMenu() {
         {"/rm", "/rm <tên>", "Xóa domain khỏi máy này"},
         {"/ls", "/ls [--mine|--all]", "Liệt kê các domain trong mạng LAN"},
         {"/info", "/info <tên>", "Xem ai đang claim, số phiếu, thứ hạng"},
+        {"/import", "/import <file> [--force]", "Nhập domain hàng loạt từ file TOML/CSV"},
+        {"/export", "/export [--csv]", "Xuất danh sách domain ra TOML hoặc CSV"},
         {"/resolve", "/resolve <tên> [--trace]", "Phân giải domain với cây 3 bước"},
         {"/peers", "/peers", "Xem danh sách peer: RTT, domain, phiên bản"},
         {"/peer", "/peer add|rm <ip>", "Quản lý kết nối peer thủ công"},

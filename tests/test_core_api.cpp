@@ -245,3 +245,19 @@ TEST_CASE("CoreApi reload skips corrupt rows instead of failing to start") {
     CHECK(api.value()->zone().record_count() == 1);  // only the valid row loaded
     CHECK(api.value()->zone().contains(dns::Name::from_presentation("good.lan").value(), 1));
 }
+
+TEST_CASE("CoreApi resolve handles resolution via pipeline") {
+    TempDir dir;
+    auto api = CoreApi::create(options_for(dir));
+    REQUIRE(api.has_value());
+
+    REQUIRE(api.value()->add_domain(add_request("server.lan", "A", {"192.168.1.50"})).has_value());
+
+    auto result = api.value()->resolve("server.lan", "A", true);
+    REQUIRE(result.has_value());
+    CHECK(result.value().resolved_step == resolver::ResolutionStep::Local);
+    CHECK(result.value().response.rcode() == static_cast<std::uint8_t>(dns::Rcode::NoError));
+    REQUIRE(result.value().response.answers.size() == 1);
+    CHECK(result.value().response.answers[0].rdata[0] == 192);
+    CHECK_FALSE(result.value().trace.empty());
+}

@@ -2,6 +2,8 @@
 
 #include <algorithm>
 
+#include "core/resolver/pipeline.hpp"
+
 namespace ldns {
 namespace {
 
@@ -27,11 +29,12 @@ Message make_response_shell(std::span<const std::uint8_t> packet) {
 
 }  // namespace
 
-QueryHandler::QueryHandler(const dns::LocalZone& zone, HandlerConfig config)
-    : zone_(zone), config_(config) {}
+QueryHandler::QueryHandler(const dns::LocalZone& zone, HandlerConfig config,
+                           std::shared_ptr<resolver::ResolverPipeline> pipeline)
+    : zone_(zone), config_(config), pipeline_(std::move(pipeline)) {}
 
 std::optional<HandlerResponse> QueryHandler::handle(std::span<const std::uint8_t> packet,
-                                                    const QueryContext& /*context*/) const {
+                                                    const QueryContext& context) const {
     if (packet.size() < dns::kHeaderSize) return std::nullopt;
 
     // Drop responses sent to the server port (also a basic loop guard).
@@ -83,6 +86,12 @@ std::optional<HandlerResponse> QueryHandler::handle(std::span<const std::uint8_t
             return HandlerResponse{std::move(response), false};
         }
         response.edns = edns;
+    }
+
+    if (pipeline_) {
+        auto pipe_res = pipeline_->resolve(query, context, false);
+        return HandlerResponse{std::move(pipe_res.response),
+                               pipe_res.resolved_step == resolver::ResolutionStep::Local};
     }
 
     // Local zone lookup, following CNAMEs inside the zone (SPEC §6.3.4).

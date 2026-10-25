@@ -240,4 +240,274 @@ Result<void> export_zone(CoreApi& api, const ExportOptions& options) {
     return {};
 }
 
+std::string format_rdata(std::uint16_t type, std::span<const std::uint8_t> rdata) {
+    switch (static_cast<dns::RrType>(type)) {
+        case dns::RrType::A:
+            if (rdata.size() == 4) return dns::format_ipv4(rdata);
+            break;
+        case dns::RrType::AAAA:
+            if (rdata.size() == 16) return dns::format_ipv6(rdata);
+            break;
+        case dns::RrType::CNAME:
+        case dns::RrType::NS:
+        case dns::RrType::PTR: {
+            auto name = dns::decode_rdata_name(rdata);
+            if (name) return name.value().to_string();
+            break;
+        }
+        case dns::RrType::TXT: {
+            auto txt = dns::decode_rdata_txt(rdata);
+            if (txt) return txt.value();
+            break;
+        }
+        default:
+            break;
+    }
+    std::string hex = "\\# " + std::to_string(rdata.size()) + " ";
+    for (std::uint8_t b : rdata) {
+        char buf[3];
+        std::snprintf(buf, sizeof(buf), "%02x", b);
+        hex += buf;
+    }
+    return hex;
+}
+
+Result<resolver::PipelineResult> resolve(CoreApi& api, const ResolveOptions& options,
+                                         std::ostream& out) {
+    auto res = api.resolve(options.name, options.type, options.trace);
+    if (!res) return res.error();
+
+    const auto& result = res.value();
+    if (options.json) {
+        json doc;
+        doc["qname"] = options.name;
+        doc["qtype"] = options.type;
+        doc["rcode"] = dns::rcode_name(static_cast<dns::Rcode>(result.response.rcode()));
+        doc["step"] = resolver::step_name(result.resolved_step);
+        doc["total_latency_us"] = result.total_latency_us;
+        doc["from_cache"] = result.from_cache;
+
+        json answers = json::array();
+        for (const auto& a : result.response.answers) {
+            json item;
+            item["name"] = a.name.to_string();
+            item["type"] = std::string(dns::rr_type_name(a.type));
+            item["ttl"] = a.ttl;
+            item["data"] = format_rdata(a.type, a.rdata);
+            answers.push_back(item);
+        }
+        doc["answers"] = answers;
+
+        json authority = json::array();
+        for (const auto& a : result.response.authority) {
+            json item;
+            item["name"] = a.name.to_string();
+            item["type"] = std::string(dns::rr_type_name(a.type));
+            item["ttl"] = a.ttl;
+            item["data"] = format_rdata(a.type, a.rdata);
+            authority.push_back(item);
+        }
+        doc["authority"] = authority;
+
+        if (options.trace) {
+            json trace_arr = json::array();
+            for (const auto& h : result.trace) {
+                json hop;
+                hop["step"] = resolver::step_name(h.step);
+                hop["qname"] = h.qname.to_string();
+                hop["qtype"] = std::string(dns::rr_type_name(h.qtype));
+                hop["responder"] = h.responder;
+                hop["latency_us"] = h.latency_us;
+                hop["rcode"] = dns::rcode_name(h.rcode);
+                hop["note"] = h.note;
+                trace_arr.push_back(hop);
+            }
+            doc["trace"] = trace_arr;
+        }
+
+        out << doc.dump(2) << '\n';
+        return res;
+    }
+
+    if (options.trace && !result.trace.empty()) {
+        out << "Trace:\n";
+        for (std::size_t i = 0; i < result.trace.size(); ++i) {
+            const auto& hop = result.trace[i];
+            out << "  " << (i + 1) << ". " << resolver::step_name(hop.step) << " (" << hop.responder << "): "
+                << dns::rcode_name(hop.rcode);
+            if (hop.latency_us > 0) out << " (" << hop.latency_us << " us)";
+            if (!hop.note.empty()) out << " - " << hop.note;
+            out << '\n';
+        }
+        out << '\n';
+    }
+
+    out << "Resolved via " << resolver::step_name(result.resolved_step)
+        << " (" << result.total_latency_us << " us)"
+        << " [" << dns::rcode_name(static_cast<dns::Rcode>(result.response.rcode())) << "]:\n";
+
+    if (result.response.answers.empty()) {
+        out << "  (no answers)\n";
+    } else {
+        for (const auto& a : result.response.answers) {
+            out << "  " << a.name.to_string() << ".  " << a.ttl << "  IN  "
+                << dns::rr_type_name(a.type) << "  " << format_rdata(a.type, a.rdata) << '\n';
+        }
+    }
+
+    return res;
+}
+
+Result<std::vector<StoredPeer>> peers(CoreApi& api, const PeersOptions& options,
+                                      std::ostream& out) {
+    auto peers_res = api.peers();
+    if (!peers_res) return peers_res.error();
+
+    auto manual_res = api.manual_peers();
+    std::vector<std::string> manuals = manual_res.value_or(std::vector<std::string>{});
+
+    if (options.json) {
+        json j = json::array();
+        for (const auto& p : peers_res.value()) {
+            json item;
+            item["node_id"] = to_hex(p.node_id);
+            item["short_id"] = short_id(p.node_id);
+            item["name"] = p.name;
+            item["address"] = p.last_addr;
+            item["epoch"] = p.epoch;
+            item["seq"] = p.seq;
+            item["last_seen_epoch_s"] = p.last_seen;
+            item["manual"] = false;
+            j.push_back(std::move(item));
+        }
+        for (const auto& m : manuals) {
+            bool already = false;
+            for (const auto& p : peers_res.value()) {
+                if (p.last_addr == m) already = true;
+            }
+            if (!already) {
+                json item;
+                item["node_id"] = "";
+                item["short_id"] = "";
+                item["name"] = "";
+                item["address"] = m;
+                item["epoch"] = 0;
+                item["seq"] = 0;
+                item["last_seen_epoch_s"] = 0;
+                item["manual"] = true;
+                j.push_back(std::move(item));
+            }
+        }
+        out << j.dump(2) << '\n';
+        return peers_res;
+    }
+
+    if (peers_res.value().empty() && manuals.empty()) {
+        out << "no peers\n";
+        return peers_res;
+    }
+
+    out << "NODE ID    NAME            ADDRESS              EPOCH  SEQ   TYPE\n";
+    for (const auto& p : peers_res.value()) {
+        std::string sid = short_id(p.node_id);
+        out << sid;
+        if (sid.size() < 11) out << std::string(11 - sid.size(), ' ');
+
+        std::string name = p.name.empty() ? "(unknown)" : p.name;
+        out << name;
+        if (name.size() < 16) out << std::string(16 - name.size(), ' ');
+
+        std::string addr = p.last_addr.empty() ? "(none)" : p.last_addr;
+        out << addr;
+        if (addr.size() < 21) out << std::string(21 - addr.size(), ' ');
+
+        std::string ep_str = std::to_string(p.epoch);
+        out << ep_str;
+        if (ep_str.size() < 7) out << std::string(7 - ep_str.size(), ' ');
+
+        std::string seq_str = std::to_string(p.seq);
+        out << seq_str;
+        if (seq_str.size() < 6) out << std::string(6 - seq_str.size(), ' ');
+
+        out << "discovered\n";
+    }
+
+    for (const auto& m : manuals) {
+        bool already = false;
+        for (const auto& p : peers_res.value()) {
+            if (p.last_addr == m) already = true;
+        }
+        if (!already) {
+            out << "-          (manual)        ";
+            out << m;
+            if (m.size() < 21) out << std::string(21 - m.size(), ' ');
+            out << "-      -     manual\n";
+        }
+    }
+
+    return peers_res;
+}
+
+Result<void> peer_add(CoreApi& api, const PeerAddOptions& options, std::ostream& out) {
+    if (options.endpoint.empty()) return Error{835, "invalid peer endpoint"};
+    auto status = api.add_manual_peer(options.endpoint);
+    if (!status) return status;
+
+    if (options.json) {
+        json j;
+        j["added"] = options.endpoint;
+        out << j.dump(2) << '\n';
+    } else {
+        out << "added peer " << options.endpoint << '\n';
+    }
+    return {};
+}
+
+Result<void> peer_rm(CoreApi& api, const PeerRmOptions& options, std::ostream& out) {
+    if (options.endpoint.empty()) return Error{835, "invalid peer endpoint"};
+    auto status = api.remove_manual_peer(options.endpoint);
+    if (!status) return status;
+
+    if (options.json) {
+        json j;
+        j["removed"] = options.endpoint;
+        out << j.dump(2) << '\n';
+    } else {
+        out << "removed peer " << options.endpoint << '\n';
+    }
+    return {};
+}
+
+Result<void> peer_forget(CoreApi& api, const PeerForgetOptions& options, std::ostream& out) {
+    if (options.node.empty()) return Error{836, "node id or prefix required"};
+    auto peers = api.peers();
+    if (!peers) return peers.error();
+
+    std::optional<NodeId> found;
+    for (const auto& p : peers.value()) {
+        std::string hx = to_hex(p.node_id);
+        std::string sh = short_id(p.node_id);
+        if (hx == options.node || sh == options.node || hx.starts_with(options.node)) {
+            found = p.node_id;
+            break;
+        }
+    }
+
+    if (!found) {
+        return Error{840, "peer not found: " + options.node};
+    }
+
+    auto status = api.delete_peer(found.value());
+    if (!status) return status.error();
+
+    if (options.json) {
+        json j;
+        j["forgot"] = to_hex(found.value());
+        out << j.dump(2) << '\n';
+    } else {
+        out << "forgot peer " << to_hex(found.value()) << '\n';
+    }
+    return {};
+}
+
 }  // namespace ldns::cli

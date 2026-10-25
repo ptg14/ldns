@@ -49,6 +49,7 @@ find_package(asio CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(unofficial-sqlite3 CONFIG REQUIRED)
 find_package(tomlplusplus CONFIG REQUIRED)
+find_package(unofficial-sodium CONFIG REQUIRED)
 
 # Asio is header-only; ASIO_NO_DEPRECATED keeps us on the modern API.
 add_library(ldns_asio INTERFACE)
@@ -81,6 +82,17 @@ add_library(ldns_core STATIC
     src/core/cli/commands.cpp
     src/core/runtime/runtime.cpp
     src/core/core_api.cpp
+    src/core/net/system_dns.cpp
+    src/core/resolver/cache.cpp
+    src/core/resolver/upstream_client.cpp
+    src/core/resolver/query_log.cpp
+    src/core/resolver/pipeline.cpp
+    src/core/net/crypto.cpp
+    src/core/net/beacon.cpp
+    src/core/net/discovery.cpp
+    src/core/net/protocol_message.cpp
+    src/core/net/session.cpp
+    src/core/net/peer_manager.cpp
 )
 target_include_directories(ldns_core PUBLIC src)
 target_link_libraries(ldns_core PUBLIC
@@ -89,6 +101,7 @@ target_link_libraries(ldns_core PUBLIC
     nlohmann_json::nlohmann_json
     unofficial::sqlite3::sqlite3
     tomlplusplus::tomlplusplus
+    unofficial-sodium::sodium
 )
 if(WIN32)
     # GetAdaptersAddresses (core/net/interfaces.cpp).

@@ -392,6 +392,98 @@ Result<bool> Store::delete_record(std::string_view name, std::uint16_t type) {
     return sqlite3_changes(db_) > 0;
 }
 
+Result<std::vector<StoredPeer>> Store::peers() {
+    std::lock_guard lock(mutex_);
+    Statement stmt(db_, "SELECT node_id, name, epoch, seq, last_addr, last_seen FROM peers ORDER BY last_seen DESC;");
+    if (!stmt) return db_error(418, "list peers");
+
+    std::vector<StoredPeer> out;
+    while (true) {
+        const int rc = sqlite3_step(stmt.get());
+        if (rc == SQLITE_DONE) break;
+        if (rc != SQLITE_ROW) return db_error(418, "list peers");
+
+        StoredPeer p;
+        const void* blob = sqlite3_column_blob(stmt.get(), 0);
+        const int bytes = sqlite3_column_bytes(stmt.get(), 0);
+        if (bytes == 16 && blob != nullptr) {
+            std::memcpy(p.node_id.data(), blob, 16);
+        }
+        p.name = column_text(stmt.get(), 1);
+        p.epoch = static_cast<std::uint64_t>(sqlite3_column_int64(stmt.get(), 2));
+        p.seq = static_cast<std::uint64_t>(sqlite3_column_int64(stmt.get(), 3));
+        p.last_addr = column_text(stmt.get(), 4);
+        p.last_seen = sqlite3_column_int64(stmt.get(), 5);
+        out.push_back(std::move(p));
+    }
+    return out;
+}
+
+Result<void> Store::put_peer(const StoredPeer& peer) {
+    std::lock_guard lock(mutex_);
+    Statement stmt(db_,
+                   "INSERT INTO peers(node_id, name, epoch, seq, last_addr, last_seen) "
+                   "VALUES(?1, ?2, ?3, ?4, ?5, ?6) "
+                   "ON CONFLICT(node_id) DO UPDATE SET "
+                   "name = excluded.name, epoch = excluded.epoch, seq = excluded.seq, "
+                   "last_addr = excluded.last_addr, last_seen = excluded.last_seen;");
+    if (!stmt) return db_error(419, "put peer");
+
+    sqlite3_bind_blob(stmt.get(), 1, peer.node_id.data(), static_cast<int>(peer.node_id.size()), SQLITE_TRANSIENT);
+    bind_text(stmt.get(), 2, peer.name);
+    sqlite3_bind_int64(stmt.get(), 3, static_cast<sqlite3_int64>(peer.epoch));
+    sqlite3_bind_int64(stmt.get(), 4, static_cast<sqlite3_int64>(peer.seq));
+    bind_text(stmt.get(), 5, peer.last_addr);
+    sqlite3_bind_int64(stmt.get(), 6, static_cast<sqlite3_int64>(peer.last_seen));
+
+    if (sqlite3_step(stmt.get()) != SQLITE_DONE) return db_error(419, "put peer");
+    return {};
+}
+
+Result<bool> Store::delete_peer(const NodeId& node_id) {
+    std::lock_guard lock(mutex_);
+    Statement stmt(db_, "DELETE FROM peers WHERE node_id = ?1;");
+    if (!stmt) return db_error(420, "delete peer");
+    sqlite3_bind_blob(stmt.get(), 1, node_id.data(), static_cast<int>(node_id.size()), SQLITE_TRANSIENT);
+    if (sqlite3_step(stmt.get()) != SQLITE_DONE) return db_error(420, "delete peer");
+    return sqlite3_changes(db_) > 0;
+}
+
+Result<std::vector<std::string>> Store::manual_peers() {
+    auto val = meta("manual_peers");
+    if (!val || !val.value().has_value()) return std::vector<std::string>{};
+    try {
+        auto j = json::parse(val.value().value());
+        if (j.is_array()) {
+            return j.get<std::vector<std::string>>();
+        }
+    } catch (...) {}
+    return std::vector<std::string>{};
+}
+
+Result<void> Store::add_manual_peer(std::string_view endpoint) {
+    auto current = manual_peers().value_or(std::vector<std::string>{});
+    std::string ep_str(endpoint);
+    if (std::find(current.begin(), current.end(), ep_str) == current.end()) {
+        current.push_back(ep_str);
+        json j = current;
+        return set_meta("manual_peers", j.dump());
+    }
+    return {};
+}
+
+Result<void> Store::remove_manual_peer(std::string_view endpoint) {
+    auto current = manual_peers().value_or(std::vector<std::string>{});
+    std::string ep_str(endpoint);
+    auto it = std::remove(current.begin(), current.end(), ep_str);
+    if (it != current.end()) {
+        current.erase(it, current.end());
+        json j = current;
+        return set_meta("manual_peers", j.dump());
+    }
+    return {};
+}
+
 Result<std::vector<UpstreamRow>> Store::upstreams() {
     std::lock_guard lock(mutex_);
     Statement stmt(db_, "SELECT address, port, proto FROM upstreams ORDER BY idx;");

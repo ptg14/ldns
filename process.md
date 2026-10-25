@@ -335,3 +335,142 @@ Nếu user muốn giữ IP ảo (vd VPN), dùng `network.self_ip = "10.x.x.x"` �
   - libFuzzer dns_message: >100.000 executions pass, 0 crash.
   - libFuzzer dns_name: >100.000 executions pass, 0 crash.
 - Tiếp theo: Sẵn sàng để người dùng xem xét và quyết định commit.
+
+## 2026-10-25 15:35 — bắt đầu (M3: Upstream + Resolver Pipeline + Cache + System DNS)
+- Việc đã làm: Đọc lại docs/SPEC.md §6, docs/PLAN.md M3; rà soát cấu trúc thư mục src/core/resolver, src/core/net; bắt đầu thiết kế và cài đặt Milestone 3:
+  1. Phát hiện DNS hệ thống (System DNS detection cho Linux /etc/resolv.conf và Windows GetAdaptersAddresses/Registry).
+  2. LRU DNS Cache trong bộ nhớ (positive/negative cache, TTL cap, invalidation, thread-safe).
+  3. Upstream client (UDP/TCP, timeout, retry, loop prevention).
+  4. QueryLog (ring buffer + SQLite).
+  5. Resolver Pipeline (Bước 0 Cache -> Bước 1 LocalZone -> Bước 2 Peer placeholder -> Bước 3 Upstream; CNAME loop/chain 8 bước; --trace).
+  6. CLI ldns resolve <name> [type] [--trace].
+- File liên quan: docs/SPEC.md §6, docs/PLAN.md M3, process.md, sắp thêm src/core/resolver/*, src/core/net/system_dns.*.
+- Cần chú ý: Tuân thủ quy tắc chống loop (loại trừ self listening IP), TTL cap theo cấu hình, negative TTL 5s, CNAME tối đa 8 bước.
+- Bug/lỗ hổng: chưa có.
+- Tiếp theo: Thiết kế và viết code cho System DNS detection và Cache LRU.
+
+## 2026-10-25 18:25 — bước quan trọng (Hoàn thành Milestone 3: Upstream + Resolver Pipeline + Cache + System DNS + CLI resolve)
+- Việc đã làm:
+  - Cài đặt phát hiện DNS hệ thống (`src/core/net/system_dns.hpp`, `.cpp`):
+    - Windows: `GetAdaptersAddresses`, lọc interface loopback/down, ưu tiên adapter có default IPv4 gateway; parse danh sách DNS server IPv4 và IPv6.
+    - Linux: đọc `/run/systemd/resolve/resolv.conf` (hoặc `/etc/resolv.conf`), parse các chỉ thị `nameserver`, bỏ qua loopback DNS của systemd-resolved (127.0.0.53) để lấy upstream thực.
+  - Cài đặt bộ nhớ đệm DNS LRU (`src/core/resolver/cache.hpp`, `.cpp`):
+    - Positive caching (RRset answers) và Negative caching (NXDOMAIN / NODATA với TTL cố định 5 giây theo SPEC §6).
+    - Giới hạn TTL: `min_ttl` (0s), `max_ttl` (86400s), decrement TTL theo thời gian trôi qua (RFC 1035).
+    - Giới hạn kích thước cache LRU (mặc định 10.000 entries), thread-safe qua `std::mutex`.
+    - Hỗ trợ xóa/invalidation theo domain name khi local zone thay đổi.
+  - Cài đặt DNS Upstream Client (`src/core/resolver/upstream_client.hpp`, `.cpp`):
+    - Asio UDP client với timeout, fallback tự động sang TCP khi nhận cờ TC=1 hoặc khi gửi gói tin EDNS kích thước lớn.
+    - Hỗ trợ danh sách upstream xoay vòng hoặc ưu tiên; chống vòng lặp phân giải (loại trừ các IP/cổng mà Ldns đang lắng nghe qua `excluded_endpoints`).
+  - Cài đặt Ring Buffer Query Log (`src/core/resolver/query_log.hpp`, `.cpp`):
+    - Vòng đệm cố định 10.000 bản ghi trong bộ nhớ, thread-safe, ghi nhận latency, rcode, bước phân giải, client IP.
+  - Cài đặt Resolver Pipeline 4 bước (`src/core/resolver/pipeline.hpp`, `.cpp`):
+    - Pipeline: Bước 0 (Cache) -> Bước 1 (LocalZone) -> Bước 2 (Peer hook) -> Bước 3 (Upstream).
+    - Hỗ trợ theo dõi CNAME chain lên tới 8 bước (chống CNAME loop/depth recursion).
+    - Ghi nhận trace hops chi tiết khi kích hoạt `--trace`.
+  - Tích hợp pipeline vào `QueryHandler`, `Runtime` và `CoreApi`:
+    - `QueryHandler` chuyển tiếp các truy vấn ra ngoài LocalZone vào `ResolverPipeline`.
+    - `Runtime` đăng ký các địa chỉ bind vào danh sách loại trừ của upstream client để ngăn ngừa DNS loop.
+    - `CoreApi::resolve(name, type, trace)` cung cấp interface phân giải hoàn chỉnh.
+  - Cài đặt lệnh CLI `ldns resolve <name> [type] [--trace] [--json]` (`src/core/cli/commands.hpp`, `.cpp`, `src/main.cpp`):
+    - Định dạng đầu ra đẹp mắt cho người dùng với latency, step name, answers và trace hops.
+    - Hỗ trợ output chuẩn định dạng JSON (`--json`) theo SPEC §10.3.
+- File liên quan:
+  - `src/core/net/system_dns.{hpp,cpp}`, `src/core/resolver/*` (`cache.*`, `upstream_client.*`, `query_log.*`, `pipeline.*`).
+  - `src/core/server/query_handler.{hpp,cpp}`, `src/core/runtime/runtime.cpp`.
+  - `src/core/core_api.{hpp,cpp}`, `src/core/cli/commands.{hpp,cpp}`, `src/core/dns/message.{hpp,cpp}`, `src/main.cpp`.
+  - `tests/test_cache.cpp`, `tests/test_query_log.cpp`, `tests/test_system_dns.cpp`, `tests/test_upstream_client.cpp`, `tests/test_pipeline.cpp`, `tests/test_cli.cpp`, `tests/test_core_api.cpp`.
+- Bug/lỗ hổng phát hiện và đã sửa trong phiên:
+  - Asio async buffer lifetime trong mock server test: `enc.value()` bị hủy khi lambda thoát trước khi hoàn tất async send -> sửa bằng `std::make_shared<std::vector<uint8_t>>`.
+  - GCC `-Wmissing-field-initializers` với aggregate init của `QueryContext` -> thêm explicit constructor.
+  - Ambiguity ADL giữa `resolver::step_name` và `cli::step_name` -> tái sử dụng `resolver::step_name`.
+- Kết quả kiểm chứng:
+  - Windows MSVC Debug: 161/161 test cases, 2116 assertions PASS (0 failures).
+  - Linux WSL GCC 13 Debug: 161/161 test cases PASS (100%).
+  - Linux WSL Clang ASan + UBSan: 161/161 test cases PASS (100%), không rò rỉ bộ nhớ hay hành vi không xác định.
+  - Kiểm thử trực tiếp binary CLI: `ldns resolve one.one.one.one --trace` và `--json` phân giải thành công qua upstream DNS hệ thống.
+- Tiếp theo: Sẵn sàng commit Milestone 3, hoặc chuyển sang Milestone 4 (Peer Discovery mDNS / DNS-SD theo SPEC §7 và PLAN M4).
+
+## 2026-10-25 18:45 — bước quan trọng (Review log CI GitHub runner và sửa lỗi test_cli / self address)
+- Việc đã làm:
+  - Phân tích toàn bộ log lỗi CI từ `C:\Code\Ldns\.github\logs\logs_108895849664`:
+    - Hai job `Linux (linux-asan)` và `Linux (linux-debug)` đều pass 100%.
+    - Job `Windows (windows-ci)` gặp 1 lỗi duy nhất tại `test_cli.cpp(73)`: `CHECK(added.error().code == 708)` thất bại với giá trị thực tế `602`.
+  - Nguyên nhân gốc rễ (Root Cause Analysis):
+    1. Trên GitHub Actions Windows runner (máy ảo Azure VM), adapter mạng duy nhất là synthetic NIC với mô tả `"Microsoft Hyper-V Network Adapter"`.
+    2. Trong `src/core/net/interfaces.cpp`, hàm `looks_virtual` so khớp từ khóa `"hyper-v"` dẫn đến việc nhận diện nhầm NIC chính của máy ảo khách thành switch ảo của máy chủ (host virtual switch).
+    3. `SelfAddress::enumerate` lọc bỏ card mạng này khiến danh sách LAN address rỗng và trả về `Error{602, "no LAN address found"}`.
+    4. Trong `tests/test_cli.cpp`, test case `"CLI add without targets uses the self address"` có comment giả định lỗi trả về là `708` thay vì `602` (do 708 chỉ xảy ra khi có address nhưng không khớp họ địa chỉ IPv4/IPv6).
+  - Khắc phục triệt để:
+    - Trong `src/core/net/interfaces.cpp`: Tinh chỉnh marker thành `"hyper-v virtual"`, `"virtualbox host-only"`, `"vmware virtual"`, phân biệt chính xác switch ảo trên máy chủ (host) với card mạng máy ảo khách (guest VM NIC).
+    - Trong `src/core/domain/self_address.cpp`: Thêm cơ chế fallback: nếu không tìm thấy adapter vật lý (chạy trong VM/container/cloud runner) thì chấp nhận adapter UP mang `default_route` của hệ thống.
+    - Trong `tests/test_cli.cpp`: Chấp nhận cả mã `602` lẫn `708` khi môi trường không có địa chỉ LAN; bổ sung test case có ghim `self_ip` để đảm bảo logic `target_kind == "self"` luôn được kiểm thử tất định (deterministic) trên mọi môi trường CI.
+- File liên quan: `src/core/net/interfaces.cpp`, `src/core/domain/self_address.cpp`, `tests/test_cli.cpp`, `process.md`.
+- Kết quả kiểm chứng:
+  - Windows MSVC Debug: 162/162 test cases, 2121 assertions PASS (0 failures).
+  - Linux WSL GCC 13 Debug: 161/161 test cases PASS (100%).
+  - Linux WSL Clang ASan + UBSan: 161/161 test cases PASS (100%), không phát hiện memory leak hay lỗi sanitizers.
+- Tiếp theo: Sẵn sàng commit và push lên GitHub để kích hoạt lại CI.
+
+## 2026-10-25 19:05 — bắt đầu (M4: Discovery + Peer Session + PeerManager)
+- Việc đã làm:
+  - Commit Milestone 3 sạch (`70f3dbd226f4b6a787d8f4969ca5ffa29e8a7d42`) sau khi giải quyết triệt để lỗi virtual adapter trên GitHub Actions CI runner.
+  - Đọc và phân tích chi tiết docs/SPEC.md §7, docs/PLAN.md M4, docs/protocol.md §3, §4, §5, §6, §9.
+  - Lập kế hoạch phân rã Milestone 4:
+    1. Phase 4.1: Beacon wire codec (LDB1, flags, MessagePack body, HMAC-SHA256) & UDP Multicast/Broadcast Discovery service (cổng 5390, 239.76.68.83, jitter, bye).
+    2. Phase 4.2: TCP Framing (4-byte BE length prefix, cap 4 MiB) & Protocol Messages (HELLO, PING, PONG, PEERS, BYE, ERROR, AUTH).
+    3. Phase 4.3: Session TCP state machine (dial/accept, handshake timeout 5s, heartbeat 5s/15s timeout, crypto HKDF/XChaCha20 nếu bật PSK).
+    4. Phase 4.4: PeerManager (quy tắc dial node_id nhỏ hơn, khử kết nối trùng, exponential backoff 1s->60s, manual_peers, peer exchange).
+    5. Phase 4.5: Tích hợp vào Runtime / CoreApi, CLI ldns peers, peer add/rm/forget, và kiểm thử đa node trên localhost.
+- File liên quan: docs/SPEC.md §7, docs/protocol.md, docs/PLAN.md M4, process.md, sắp thêm src/core/net/* (beacon, discovery, session, peer_manager, crypto).
+- Cần chú ý: Tuân thủ quy tắc dial (node_id nhỏ chủ động dial), handshake 5s, heartbeat 5s/15s, MessagePack bin types cho node_id/net hash/nonce.
+- Bug/lỗ hổng: chưa có.
+- Tiếp theo: Thiết kế và cài đặt Phase 4.1 (Beacon wire codec và Discovery service).
+
+
+
+## 2026-10-25 21:15 — bước quan trọng (Hoàn thành toàn diện Milestone 4: Discovery + Peer Connection + PeerManager)
+- Việc đã làm:
+  - Phase 4.1 (Crypto & Beacon & UDP Discovery):
+    - Tích hợp libsodium (`unofficial-sodium::sodium`), cài đặt `crypto::init()`, `crypto::sha256()`, `crypto::net_hash()`, `crypto::random_bytes()`.
+    - Cài đặt bộ mã hóa/giải mã wire format `LDB1` (protocol §3.1-§3.2) với MessagePack (`nlohmann::json::to_msgpack` / `from_msgpack`).
+    - Dịch vụ phát hiện `DiscoveryService`: UDP Multicast (`239.76.68.83:5390`) + Broadcast dự phòng với lịch gửi jitter (2s ban đầu, 10s ±20%) và 3-burst `bye` datagrams (protocol §3.3) khi tắt máy.
+  - Phase 4.2 (TCP Framing & Protocol Messages):
+    - Định dạng khung TCP 4-byte Big-Endian độ dài, trần 4 MiB chống DoS.
+    - Đóng gói/giải mã MessagePack cho tất cả các loại bản tin giao thức: `HELLO`, `PING`, `PONG`, `BYE`, `PEERS`, `ERROR`, `AUTH`.
+  - Phase 4.3 (TCP Session State Machine):
+    - Máy trạng thái phiên TCP bất đồng bộ: handshake timeout 5s, kiểm tra `net_hash` và phiên bản tương thích.
+    - Heartbeat PING mỗi 5s, phát hiện mất kết nối sau 15s không có lưu lượng, đóng và báo mất kết nối.
+    - Hàng đợi ghi bất đồng bộ (async write queue) an toàn luồng, không phân mảnh bản tin.
+  - Phase 4.4 (PeerManager):
+    - Quản lý bảng peer, quy tắc dial xác định theo protocol §9.1 (`node_id(self) < node_id(peer)` chủ động quay số).
+    - Khử kết nối đôi (connection deduplication) bằng cách so sánh node_id và vai trò Initiator/Responder, gửi lỗi `ERROR DUPLICATE` trước khi đóng phiên thừa.
+    - Exponential backoff khi quay số lại (1s -> 2s -> 4s -> ... -> tối đa 60s); tự động reset backoff khi nhận được beacon mới.
+    - Trao đổi danh sách peer (`PEERS`) ngay sau khi handshake hoàn tất.
+  - Phase 4.5 (Tích hợp Runtime, CoreApi, Store và CLI):
+    - `Store`: Bổ sung bảng `peers` trong SQLite, lưu trữ trạng thái peer và danh sách `manual_peers` trong `meta`.
+    - `CoreApi`: Bổ sung các phương thức quản lý peer `peers()`, `put_peer()`, `delete_peer()`, `manual_peers()`, `add_manual_peer()`, `remove_manual_peer()`.
+    - `Runtime`: Khởi tạo và liên kết `PeerManager` và `DiscoveryService` trong vòng đời daemon/TUI; thiết lập bộ giám sát IP card mạng định kỳ (10s), tự động gửi beacon cập nhật tức thì khi IP LAN thay đổi.
+    - CLI commands:
+      - `ldns peers [--json]`: Hiển thị danh sách peer đã kết nối, đã khám phá và thêm thủ công.
+      - `ldns peer add <endpoint>`: Thêm peer thủ công cho mạng chặn multicast.
+      - `ldns peer rm <endpoint>`: Xóa peer thủ công.
+      - `ldns peer forget <node_id>`: Quên node khỏi bảng lưu trữ peer.
+- File liên quan:
+  - `CMakeLists.txt`, `tests/CMakeLists.txt`.
+  - `src/core/net/crypto.{hpp,cpp}`, `src/core/net/beacon.{hpp,cpp}`, `src/core/net/discovery.{hpp,cpp}`.
+  - `src/core/net/protocol_message.{hpp,cpp}`, `src/core/net/session.{hpp,cpp}`, `src/core/net/peer_manager.{hpp,cpp}`.
+  - `src/core/store/store.{hpp,cpp}`, `src/core/core_api.{hpp,cpp}`, `src/core/runtime/runtime.{hpp,cpp}`.
+  - `src/core/cli/commands.{hpp,cpp}`, `src/main.cpp`.
+  - `tests/test_beacon.cpp`, `tests/test_discovery.cpp`, `tests/test_protocol_message.cpp`, `tests/test_session.cpp`, `tests/test_peer_manager.cpp`, `tests/test_cli.cpp`.
+- Bug/lỗ hổng phát hiện và đã sửa trong phiên:
+  - MSVC warning C4834 `[[nodiscard]]` trên `crypto::init()` -> thêm `(void)crypto::init();`.
+  - GCC `<algorithm>` thiếu `#include` trong `crypto.cpp` -> thêm header.
+  - Tham số `node_id` không dùng trong `dial_peer()` -> thêm `(void)node_id;`.
+  - Tranh chấp cổng động ngẫu nhiên trong test DNS server -> xác nhận socket teardown sạch.
+- Kết quả kiểm chứng:
+  - Windows MSVC Debug: 175/175 test cases, 2252 assertions PASS (100%).
+  - Linux WSL GCC 13 Debug: 175/175 test cases PASS (100%).
+  - Linux WSL Clang AddressSanitizer + UndefinedBehaviorSanitizer: 175/175 test cases PASS (100%), không phát hiện rò rỉ bộ nhớ hay lỗi bộ nhớ.
+  - Kiểm thử trực tiếp CLI: Các lệnh `ldns peers`, `ldns peer add`, `ldns peer rm`, `ldns peer forget` đều chạy mượt mà ở cả chế độ bảng và chế độ JSON.
+- Tiếp theo: Sẵn sàng đề xuất commit Milestone 4 cho người dùng, sau đó tiến hành Milestone 5 (Đồng bộ Registry real-time theo docs/PLAN.md §M5).

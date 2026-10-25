@@ -16,6 +16,16 @@ add_executable(ldns_tests
     test_domain_service.cpp
     test_core_api.cpp
     test_cli.cpp
+    test_cache.cpp
+    test_query_log.cpp
+    test_system_dns.cpp
+    test_upstream_client.cpp
+    test_pipeline.cpp
+    test_beacon.cpp
+    test_discovery.cpp
+    test_protocol_message.cpp
+    test_session.cpp
+    test_peer_manager.cpp
     test_ui.cpp
 )
 target_link_libraries(ldns_tests PRIVATE ldns_core ldns_ui doctest::doctest)

@@ -87,6 +87,22 @@ Result<std::vector<AddressBytes>> SelfAddress::enumerate(const SelfAddressOption
         }
     }
 
+    if (out.empty() && !explicit_interface) {
+        // Fallback: If no non-virtual adapter was found (e.g. running inside a cloud
+        // VM, CI runner, or container), fall back to any active UP adapter carrying
+        // the default route.
+        for (const auto& interface : interfaces.value()) {
+            if (!interface.up || interface.loopback || !interface.default_route) continue;
+            for (const auto& address : interface.addresses) {
+                if (!address.is_v4()) continue;
+                if (is_loopback_v4(address.bytes) || is_link_local_v4(address.bytes)) continue;
+                out.push_back(address.bytes);
+            }
+        }
+        std::sort(out.begin(), out.end());
+        out.erase(std::unique(out.begin(), out.end()), out.end());
+    }
+
     if (out.empty()) {
         return Error{602, "no LAN address found; set network.self_ip to pin one"};
     }

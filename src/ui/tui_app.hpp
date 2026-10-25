@@ -18,11 +18,15 @@
 #include "ui/widgets/upstream_view.hpp"
 #include "ui/widgets/welcome_panel.hpp"
 
+namespace ldns {
+class CoreApi;
+}
+
 namespace ldns::ui {
 
 class TuiApp {
 public:
-    TuiApp();
+    explicit TuiApp(std::unique_ptr<CoreApi> core = nullptr);
     ~TuiApp();
 
     // Runs the main interactive TUI event loop
@@ -42,6 +46,8 @@ private:
 
     Terminal& term_;
     InlineRenderer renderer_;
+
+    std::unique_ptr<CoreApi> core_;
 
     InputBox input_box_;
     SlashMenu slash_menu_;
@@ -64,7 +70,7 @@ private:
     };
     std::vector<ScrollbackEntry> scrollback_entries_;
 
-    // Mock/interactive UI state (ready to bind to Core services upon completion)
+    // Interactive UI state (syncs with CoreApi if present, otherwise uses mock data)
     std::vector<std::pair<std::string, std::string>> my_domains_;
     std::vector<PeerNode> my_peers_;
     std::vector<UpstreamServer> my_upstreams_;

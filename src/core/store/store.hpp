@@ -54,6 +54,15 @@ struct StoreOptions {
     std::uint32_t busy_timeout_ms{5000};
 };
 
+struct StoredPeer {
+    NodeId node_id{};
+    std::string name;
+    std::uint64_t epoch{0};
+    std::uint64_t seq{0};
+    std::string last_addr;
+    std::int64_t last_seen{0};
+};
+
 struct UpstreamRow {
     std::string address;
     std::uint16_t port{53};
@@ -89,6 +98,16 @@ public:
     Result<std::vector<RecordRow>> records_for_name(std::string_view name);
     Result<void> put_record(const RecordRow& row);
     Result<bool> delete_record(std::string_view name, std::uint16_t type);
+
+    // --- peers -------------------------------------------------------------
+    Result<std::vector<StoredPeer>> peers();
+    Result<void> put_peer(const StoredPeer& peer);
+    Result<bool> delete_peer(const NodeId& node_id);
+
+    // --- manual_peers ------------------------------------------------------
+    Result<std::vector<std::string>> manual_peers();
+    Result<void> add_manual_peer(std::string_view endpoint);
+    Result<void> remove_manual_peer(std::string_view endpoint);
 
     // --- upstreams ---------------------------------------------------------
     Result<std::vector<UpstreamRow>> upstreams();

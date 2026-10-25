@@ -293,3 +293,31 @@
 - Cần chú ý: Tuân thủ nghiêm ngặt `CLAUDE.md` §2, liệt kê file thay đổi và viết sẵn commit message đề xuất để người dùng quyết định, tuyệt đối không tự ý commit hay push.
 - Bug/lỗ hổng: 0 lỗi tồn đọng.
 - Tiếp theo: Trình bày danh sách file và commit message đề xuất cho người dùng quyết định.
+
+
+## 2026-10-25 16:35 — bước quan trọng (merge nhánh main vào feat/ux-ui, giải quyết conflict và gắn kết UX/UI với CoreApi M2)
+- Việc đã làm:
+  - Nhận yêu cầu từ người dùng: Merge cập nhật mới nhất từ nhánh `main` (kết quả Milestone 2: SQLite Store, DomainService CRUD, TOML Config, SelfAddress, CoreApi) vào nhánh `feat/ux-ui`, sửa conflict và hoàn thiện UX/UI khớp với cập nhật mới.
+  - Tiến hành merge và giải quyết sạch sẽ 3 conflict:
+    1. `CLAUDE.md`: Hòa nhập quy định phân chia 2 nhánh phát triển song song (`main` = CLI/Core, `feat/ux-ui` = TUI) cùng quy chuẩn làm việc của phân hệ UX/UI.
+    2. `tests/CMakeLists.txt`: Giữ đầy đủ bộ unit tests của Core (`test_store`, `test_config`, `test_domain_service`, `test_core_api`, `test_cli`) và test của UI (`test_ui.cpp`).
+    3. `src/main.cpp`: Kết hợp toàn bộ hệ thống CLI subcommand (`add`, `set`, `rm`, `ls`, `status`, `import`, `export`, `daemon`) và mở giao diện Claude Code Inline TUI khi không truyền lệnh con hoặc truyền `--config`/`--data`.
+  - Nâng cấp phân hệ UX/UI từ chế độ Mock Data sang kết nối trực tiếp với `CoreApi`:
+    * `src/ui/tui_app.hpp` & `src/ui/tui_app.cpp`: Constructor nhận `std::unique_ptr<CoreApi> core`.
+    * Tự động đồng bộ thông số khởi tạo từ `core_->status()`: Node ID, mạng LAN, IP card mạng, số lượng domain, trạng thái mã hóa khóa PSK.
+    * Đăng ký EventBus listener qua `core_->set_event_handler(...)`: Tự động nhận diện và thông báo thời gian thực vào scrollback khi có sự kiện `RecordPut` / `RecordDel`.
+    * Lệnh `/status`: Đọc và hiển thị thông số chi tiết thực tế của SQLite Store, file config, card mạng LAN và trạng thái an toàn PSK.
+    * Lệnh `/ls`: Đọc và hiển thị danh sách bản ghi cục bộ thực tế từ SQLite database qua `core_->list_domains()`.
+    * Lệnh `/add` & `/set`: Lưu bản ghi vào SQLite và cập nhật `LocalZone` ngay lập tức, tự động hỗ trợ đích `self` (LAN IP) và cảnh báo Public TLD kèm cờ `--force`.
+    * Lệnh `/rm`: Xóa bản ghi an toàn từ SQLite và zone.
+    * Lệnh `/import <file> [--force]`: Nhập hàng loạt bản ghi từ file TOML/CSV, hiển thị số bản ghi thành công/bỏ qua và cảnh báo chi tiết.
+    * Lệnh `/export [--csv]`: Xuất toàn bộ bản ghi vùng zone sang định dạng TOML hoặc CSV.
+    * Cập nhật danh mục gợi ý [`SlashMenu`](src/ui/widgets/slash_menu.cpp) và hướng dẫn `/help` bổ sung `/import` và `/export`.
+    * Sửa cảnh báo macro `NOMINMAX` trong `src/main.cpp` trên Windows MSVC.
+  - Kiểm thử:
+    * Windows MSVC Debug: Build thành công, `ctest` đạt **100% PASS** (toàn bộ 146 test cases gồm cả Core M1-M2 và UI widgets).
+    * Linux WSL GCC 13 Debug: Build thành công 62/62 targets, `ctest` đạt **100% PASS**.
+- File liên quan: `CLAUDE.md`, `CMakeLists.txt`, `tests/CMakeLists.txt`, `src/main.cpp`, `src/ui/tui_app.hpp`, `src/ui/tui_app.cpp`, `src/ui/widgets/slash_menu.cpp`, `process-ui.md`.
+- Cần chú ý: Tuân thủ quy định `CLAUDE.md` §6: nhánh `feat/ux-ui` gọi toàn bộ logic qua `CoreApi`, không viết lại logic core trong tầng UI.
+- Bug/lỗ hổng: 0 lỗi.
+- Tiếp theo: Bàn giao để người dùng kiểm tra TUI trên terminal.
