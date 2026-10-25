@@ -358,4 +358,156 @@ Result<resolver::PipelineResult> resolve(CoreApi& api, const ResolveOptions& opt
     return res;
 }
 
+Result<std::vector<StoredPeer>> peers(CoreApi& api, const PeersOptions& options,
+                                      std::ostream& out) {
+    auto peers_res = api.peers();
+    if (!peers_res) return peers_res.error();
+
+    auto manual_res = api.manual_peers();
+    std::vector<std::string> manuals = manual_res.value_or(std::vector<std::string>{});
+
+    if (options.json) {
+        json j = json::array();
+        for (const auto& p : peers_res.value()) {
+            json item;
+            item["node_id"] = to_hex(p.node_id);
+            item["short_id"] = short_id(p.node_id);
+            item["name"] = p.name;
+            item["address"] = p.last_addr;
+            item["epoch"] = p.epoch;
+            item["seq"] = p.seq;
+            item["last_seen_epoch_s"] = p.last_seen;
+            item["manual"] = false;
+            j.push_back(std::move(item));
+        }
+        for (const auto& m : manuals) {
+            bool already = false;
+            for (const auto& p : peers_res.value()) {
+                if (p.last_addr == m) already = true;
+            }
+            if (!already) {
+                json item;
+                item["node_id"] = "";
+                item["short_id"] = "";
+                item["name"] = "";
+                item["address"] = m;
+                item["epoch"] = 0;
+                item["seq"] = 0;
+                item["last_seen_epoch_s"] = 0;
+                item["manual"] = true;
+                j.push_back(std::move(item));
+            }
+        }
+        out << j.dump(2) << '\n';
+        return peers_res;
+    }
+
+    if (peers_res.value().empty() && manuals.empty()) {
+        out << "no peers\n";
+        return peers_res;
+    }
+
+    out << "NODE ID    NAME            ADDRESS              EPOCH  SEQ   TYPE\n";
+    for (const auto& p : peers_res.value()) {
+        std::string sid = short_id(p.node_id);
+        out << sid;
+        if (sid.size() < 11) out << std::string(11 - sid.size(), ' ');
+
+        std::string name = p.name.empty() ? "(unknown)" : p.name;
+        out << name;
+        if (name.size() < 16) out << std::string(16 - name.size(), ' ');
+
+        std::string addr = p.last_addr.empty() ? "(none)" : p.last_addr;
+        out << addr;
+        if (addr.size() < 21) out << std::string(21 - addr.size(), ' ');
+
+        std::string ep_str = std::to_string(p.epoch);
+        out << ep_str;
+        if (ep_str.size() < 7) out << std::string(7 - ep_str.size(), ' ');
+
+        std::string seq_str = std::to_string(p.seq);
+        out << seq_str;
+        if (seq_str.size() < 6) out << std::string(6 - seq_str.size(), ' ');
+
+        out << "discovered\n";
+    }
+
+    for (const auto& m : manuals) {
+        bool already = false;
+        for (const auto& p : peers_res.value()) {
+            if (p.last_addr == m) already = true;
+        }
+        if (!already) {
+            out << "-          (manual)        ";
+            out << m;
+            if (m.size() < 21) out << std::string(21 - m.size(), ' ');
+            out << "-      -     manual\n";
+        }
+    }
+
+    return peers_res;
+}
+
+Result<void> peer_add(CoreApi& api, const PeerAddOptions& options, std::ostream& out) {
+    if (options.endpoint.empty()) return Error{835, "invalid peer endpoint"};
+    auto status = api.add_manual_peer(options.endpoint);
+    if (!status) return status;
+
+    if (options.json) {
+        json j;
+        j["added"] = options.endpoint;
+        out << j.dump(2) << '\n';
+    } else {
+        out << "added peer " << options.endpoint << '\n';
+    }
+    return {};
+}
+
+Result<void> peer_rm(CoreApi& api, const PeerRmOptions& options, std::ostream& out) {
+    if (options.endpoint.empty()) return Error{835, "invalid peer endpoint"};
+    auto status = api.remove_manual_peer(options.endpoint);
+    if (!status) return status;
+
+    if (options.json) {
+        json j;
+        j["removed"] = options.endpoint;
+        out << j.dump(2) << '\n';
+    } else {
+        out << "removed peer " << options.endpoint << '\n';
+    }
+    return {};
+}
+
+Result<void> peer_forget(CoreApi& api, const PeerForgetOptions& options, std::ostream& out) {
+    if (options.node.empty()) return Error{836, "node id or prefix required"};
+    auto peers = api.peers();
+    if (!peers) return peers.error();
+
+    std::optional<NodeId> found;
+    for (const auto& p : peers.value()) {
+        std::string hx = to_hex(p.node_id);
+        std::string sh = short_id(p.node_id);
+        if (hx == options.node || sh == options.node || hx.starts_with(options.node)) {
+            found = p.node_id;
+            break;
+        }
+    }
+
+    if (!found) {
+        return Error{840, "peer not found: " + options.node};
+    }
+
+    auto status = api.delete_peer(found.value());
+    if (!status) return status.error();
+
+    if (options.json) {
+        json j;
+        j["forgot"] = to_hex(found.value());
+        out << j.dump(2) << '\n';
+    } else {
+        out << "forgot peer " << to_hex(found.value()) << '\n';
+    }
+    return {};
+}
+
 }  // namespace ldns::cli

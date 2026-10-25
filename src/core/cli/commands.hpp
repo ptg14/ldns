@@ -86,4 +86,31 @@ struct ResolveOptions {
 Result<resolver::PipelineResult> resolve(CoreApi& api, const ResolveOptions& options,
                                          std::ostream& out = std::cout);
 
+struct PeersOptions {
+    bool json{false};
+};
+Result<std::vector<StoredPeer>> peers(CoreApi& api, const PeersOptions& options,
+                                      std::ostream& out = std::cout);
+
+struct PeerAddOptions {
+    std::string endpoint;
+    bool json{false};
+};
+Result<void> peer_add(CoreApi& api, const PeerAddOptions& options,
+                      std::ostream& out = std::cout);
+
+struct PeerRmOptions {
+    std::string endpoint;
+    bool json{false};
+};
+Result<void> peer_rm(CoreApi& api, const PeerRmOptions& options,
+                     std::ostream& out = std::cout);
+
+struct PeerForgetOptions {
+    std::string node;
+    bool json{false};
+};
+Result<void> peer_forget(CoreApi& api, const PeerForgetOptions& options,
+                         std::ostream& out = std::cout);
+
 }  // namespace ldns::cli

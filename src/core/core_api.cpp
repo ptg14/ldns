@@ -250,6 +250,37 @@ Result<std::size_t> CoreApi::refresh_self_addresses() {
     return service_.refresh_self_records(addresses.value());
 }
 
+Result<std::vector<StoredPeer>> CoreApi::peers() {
+    return store_.peers();
+}
+
+Result<void> CoreApi::put_peer(const StoredPeer& peer) {
+    return store_.put_peer(peer);
+}
+
+Result<bool> CoreApi::delete_peer(const NodeId& node_id) {
+    return store_.delete_peer(node_id);
+}
+
+Result<std::vector<std::string>> CoreApi::manual_peers() const {
+    auto from_store = const_cast<Store&>(store_).manual_peers().value_or(std::vector<std::string>{});
+    std::vector<std::string> combined = options_.config.network.manual_peers;
+    for (const auto& ep : from_store) {
+        if (std::find(combined.begin(), combined.end(), ep) == combined.end()) {
+            combined.push_back(ep);
+        }
+    }
+    return combined;
+}
+
+Result<void> CoreApi::add_manual_peer(std::string_view endpoint) {
+    return store_.add_manual_peer(endpoint);
+}
+
+Result<void> CoreApi::remove_manual_peer(std::string_view endpoint) {
+    return store_.remove_manual_peer(endpoint);
+}
+
 Result<domain::ImportReport> CoreApi::import_file(const std::string& path, bool force) {
     std::error_code size_ec;
     const auto size = std::filesystem::file_size(path, size_ec);

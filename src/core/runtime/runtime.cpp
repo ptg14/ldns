@@ -162,19 +162,122 @@ Result<void> Runtime::start() {
     up_cfg.excluded_endpoints = bound_;
     api_->upstream_client().set_config(std::move(up_cfg));
 
+
+    std::string hostname;
+    try {
+        hostname = asio::ip::host_name();
+    } catch (...) {}
+    if (hostname.empty()) {
+        hostname = api_->status().short_id;
+    }
+
+    // Start PeerManager
+    net::PeerManagerConfig pm_cfg;
+    pm_cfg.node_id = api_->status().node_id;
+    pm_cfg.node_name = hostname;
+    pm_cfg.network_name = api_->config().network.name;
+    pm_cfg.sync_port = api_->config().network.sync_port;
+    pm_cfg.dns_port = kDnsPort;
+    pm_cfg.manual_peers = api_->manual_peers().value_or(std::vector<std::string>{});
+    const auto self_ips = api_->self_addresses().value_or(std::vector<domain::SelfAddressBytes>{});
+    pm_cfg.my_ips = self_ips;
+    pm_cfg.my_epoch = api_->status().epoch;
+    pm_cfg.my_seq = api_->status().seq;
+
+    peer_manager_ = net::PeerManager::create(
+        io_, std::move(pm_cfg),
+        [this](const net::PeerRecord& peer, bool online) {
+            logger()->info("peer {}: {} ({})", online ? "connected" : "disconnected",
+                           peer.name, to_hex(peer.node_id));
+            StoredPeer sp;
+            sp.node_id = peer.node_id;
+            sp.name = peer.name;
+            sp.epoch = peer.epoch;
+            sp.seq = peer.seq;
+            if (!peer.ips.empty()) {
+                sp.last_addr = peer.ips.front() + ":" + std::to_string(peer.sync_port);
+            }
+            sp.last_seen = std::chrono::duration_cast<std::chrono::seconds>(
+                               std::chrono::system_clock::now().time_since_epoch())
+                               .count();
+            (void)api_->put_peer(sp);
+        });
+
+    if (auto status = peer_manager_->start(); !status) {
+        logger()->warn("failed to start peer manager: {}", status.error().message);
+    }
+
+    // Start DiscoveryService
+    net::DiscoveryConfig disc_cfg;
+    disc_cfg.node_id = api_->status().node_id;
+    disc_cfg.node_name = hostname;
+    disc_cfg.network_name = api_->config().network.name;
+    disc_cfg.discovery_port = api_->config().network.discovery_port;
+    disc_cfg.sync_port = peer_manager_ ? peer_manager_->bound_port() : api_->config().network.sync_port;
+    disc_cfg.dns_port = kDnsPort;
+
+    discovery_ = std::make_shared<net::DiscoveryService>(
+        io_, std::move(disc_cfg),
+        [this](const net::DiscoveredPeer& peer) {
+            if (peer_manager_) {
+                peer_manager_->on_beacon_discovered(peer);
+            }
+        });
+
+    discovery_->trigger_beacon(api_->status().epoch, api_->status().seq, self_ips);
+
+    if (auto status = discovery_->start(); !status) {
+        logger()->warn("failed to start discovery service: {}", status.error().message);
+    }
+
     started_ = true;
+    start_interface_monitor();
     return {};
+
 }
 
 void Runtime::stop() {
+    if (interface_monitor_timer_) {
+        interface_monitor_timer_->cancel();
+    }
+    if (discovery_) {
+        discovery_->stop();
+        discovery_.reset();
+    }
+    if (peer_manager_) {
+        peer_manager_->stop();
+        peer_manager_.reset();
+    }
     if (server_) {
         server_->stop();
+        server_.reset();
     }
     started_ = false;
     // Release the work guard so run() can return after the current handlers.
     work_guard_.reset();
     io_.stop();
 }
+
+void Runtime::start_interface_monitor() {
+    if (!started_) return;
+    if (!interface_monitor_timer_) {
+        interface_monitor_timer_ = std::make_unique<asio::steady_timer>(io_);
+    }
+    interface_monitor_timer_->expires_after(std::chrono::seconds(10));
+    interface_monitor_timer_->async_wait([this](const asio::error_code& ec) {
+        if (ec || !started_) return;
+        if (auto changed = api_->refresh_self_addresses(); changed && changed.value() > 0) {
+            logger()->info("network interface change detected; refreshed {} self record(s)",
+                           changed.value());
+            const auto new_ips = api_->self_addresses().value_or(std::vector<domain::SelfAddressBytes>{});
+            if (discovery_) {
+                discovery_->trigger_beacon(api_->status().epoch, api_->status().seq, new_ips);
+            }
+        }
+        start_interface_monitor();
+    });
+}
+
 
 void Runtime::run() { io_.run(); }
 

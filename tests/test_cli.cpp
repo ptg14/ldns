@@ -265,3 +265,72 @@ TEST_CASE("CLI resolve supports --json and --trace") {
     REQUIRE(parsed_json["trace"].is_array());
     CHECK_FALSE(parsed_json["trace"].empty());
 }
+
+TEST_CASE("CLI peer add, list, rm, forget") {
+    TempDir dir;
+    auto api = CoreApi::create(options_for(dir));
+    REQUIRE(api.has_value());
+
+    std::ostringstream ss;
+    cli::PeersOptions p_opt;
+    auto list_empty = cli::peers(*api.value(), p_opt, ss);
+    REQUIRE(list_empty.has_value());
+    CHECK(ss.str().find("no peers") != std::string::npos);
+
+    // 1. Add manual peer
+    ss.str("");
+    cli::PeerAddOptions add_opt;
+    add_opt.endpoint = "10.0.0.2:5391";
+    REQUIRE(cli::peer_add(*api.value(), add_opt, ss).has_value());
+    CHECK(ss.str().find("added peer 10.0.0.2:5391") != std::string::npos);
+
+    // 2. List peers - text and JSON
+    ss.str("");
+    REQUIRE(cli::peers(*api.value(), p_opt, ss).has_value());
+    CHECK(ss.str().find("10.0.0.2:5391") != std::string::npos);
+    CHECK(ss.str().find("manual") != std::string::npos);
+
+    ss.str("");
+    p_opt.json = true;
+    REQUIRE(cli::peers(*api.value(), p_opt, ss).has_value());
+    auto pj = nlohmann::json::parse(ss.str(), nullptr, false);
+    REQUIRE_FALSE(pj.is_discarded());
+    REQUIRE(pj.is_array());
+    CHECK(pj.size() == 1);
+    CHECK(pj[0]["address"] == "10.0.0.2:5391");
+    CHECK(pj[0]["manual"] == true);
+
+    // 3. Put a discovered peer directly into store
+    StoredPeer sp;
+    sp.node_id.fill(0xAA);
+    sp.name = "node-alpha";
+    sp.epoch = 1;
+    sp.seq = 42;
+    sp.last_addr = "10.0.0.3:5391";
+    sp.last_seen = 1000;
+    REQUIRE(api.value()->put_peer(sp).has_value());
+
+    p_opt.json = false;
+    ss.str("");
+    REQUIRE(cli::peers(*api.value(), p_opt, ss).has_value());
+    CHECK(ss.str().find("node-alpha") != std::string::npos);
+    CHECK(ss.str().find("10.0.0.3:5391") != std::string::npos);
+
+    // 4. Forget peer
+    ss.str("");
+    cli::PeerForgetOptions fg_opt;
+    fg_opt.node = "aaaa";
+    REQUIRE(cli::peer_forget(*api.value(), fg_opt, ss).has_value());
+    CHECK(ss.str().find("forgot peer") != std::string::npos);
+
+    // 5. Remove manual peer
+    ss.str("");
+    cli::PeerRmOptions rm_opt;
+    rm_opt.endpoint = "10.0.0.2:5391";
+    REQUIRE(cli::peer_rm(*api.value(), rm_opt, ss).has_value());
+    CHECK(ss.str().find("removed peer 10.0.0.2:5391") != std::string::npos);
+
+    ss.str("");
+    REQUIRE(cli::peers(*api.value(), p_opt, ss).has_value());
+    CHECK(ss.str().find("no peers") != std::string::npos);
+}

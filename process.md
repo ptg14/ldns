@@ -412,4 +412,65 @@ Nếu user muốn giữ IP ảo (vd VPN), dùng `network.self_ip = "10.x.x.x"` �
   - Linux WSL Clang ASan + UBSan: 161/161 test cases PASS (100%), không phát hiện memory leak hay lỗi sanitizers.
 - Tiếp theo: Sẵn sàng commit và push lên GitHub để kích hoạt lại CI.
 
+## 2026-10-25 19:05 — bắt đầu (M4: Discovery + Peer Session + PeerManager)
+- Việc đã làm:
+  - Commit Milestone 3 sạch (`70f3dbd226f4b6a787d8f4969ca5ffa29e8a7d42`) sau khi giải quyết triệt để lỗi virtual adapter trên GitHub Actions CI runner.
+  - Đọc và phân tích chi tiết docs/SPEC.md §7, docs/PLAN.md M4, docs/protocol.md §3, §4, §5, §6, §9.
+  - Lập kế hoạch phân rã Milestone 4:
+    1. Phase 4.1: Beacon wire codec (LDB1, flags, MessagePack body, HMAC-SHA256) & UDP Multicast/Broadcast Discovery service (cổng 5390, 239.76.68.83, jitter, bye).
+    2. Phase 4.2: TCP Framing (4-byte BE length prefix, cap 4 MiB) & Protocol Messages (HELLO, PING, PONG, PEERS, BYE, ERROR, AUTH).
+    3. Phase 4.3: Session TCP state machine (dial/accept, handshake timeout 5s, heartbeat 5s/15s timeout, crypto HKDF/XChaCha20 nếu bật PSK).
+    4. Phase 4.4: PeerManager (quy tắc dial node_id nhỏ hơn, khử kết nối trùng, exponential backoff 1s->60s, manual_peers, peer exchange).
+    5. Phase 4.5: Tích hợp vào Runtime / CoreApi, CLI ldns peers, peer add/rm/forget, và kiểm thử đa node trên localhost.
+- File liên quan: docs/SPEC.md §7, docs/protocol.md, docs/PLAN.md M4, process.md, sắp thêm src/core/net/* (beacon, discovery, session, peer_manager, crypto).
+- Cần chú ý: Tuân thủ quy tắc dial (node_id nhỏ chủ động dial), handshake 5s, heartbeat 5s/15s, MessagePack bin types cho node_id/net hash/nonce.
+- Bug/lỗ hổng: chưa có.
+- Tiếp theo: Thiết kế và cài đặt Phase 4.1 (Beacon wire codec và Discovery service).
 
+
+
+## 2026-10-25 21:15 — bước quan trọng (Hoàn thành toàn diện Milestone 4: Discovery + Peer Connection + PeerManager)
+- Việc đã làm:
+  - Phase 4.1 (Crypto & Beacon & UDP Discovery):
+    - Tích hợp libsodium (`unofficial-sodium::sodium`), cài đặt `crypto::init()`, `crypto::sha256()`, `crypto::net_hash()`, `crypto::random_bytes()`.
+    - Cài đặt bộ mã hóa/giải mã wire format `LDB1` (protocol §3.1-§3.2) với MessagePack (`nlohmann::json::to_msgpack` / `from_msgpack`).
+    - Dịch vụ phát hiện `DiscoveryService`: UDP Multicast (`239.76.68.83:5390`) + Broadcast dự phòng với lịch gửi jitter (2s ban đầu, 10s ±20%) và 3-burst `bye` datagrams (protocol §3.3) khi tắt máy.
+  - Phase 4.2 (TCP Framing & Protocol Messages):
+    - Định dạng khung TCP 4-byte Big-Endian độ dài, trần 4 MiB chống DoS.
+    - Đóng gói/giải mã MessagePack cho tất cả các loại bản tin giao thức: `HELLO`, `PING`, `PONG`, `BYE`, `PEERS`, `ERROR`, `AUTH`.
+  - Phase 4.3 (TCP Session State Machine):
+    - Máy trạng thái phiên TCP bất đồng bộ: handshake timeout 5s, kiểm tra `net_hash` và phiên bản tương thích.
+    - Heartbeat PING mỗi 5s, phát hiện mất kết nối sau 15s không có lưu lượng, đóng và báo mất kết nối.
+    - Hàng đợi ghi bất đồng bộ (async write queue) an toàn luồng, không phân mảnh bản tin.
+  - Phase 4.4 (PeerManager):
+    - Quản lý bảng peer, quy tắc dial xác định theo protocol §9.1 (`node_id(self) < node_id(peer)` chủ động quay số).
+    - Khử kết nối đôi (connection deduplication) bằng cách so sánh node_id và vai trò Initiator/Responder, gửi lỗi `ERROR DUPLICATE` trước khi đóng phiên thừa.
+    - Exponential backoff khi quay số lại (1s -> 2s -> 4s -> ... -> tối đa 60s); tự động reset backoff khi nhận được beacon mới.
+    - Trao đổi danh sách peer (`PEERS`) ngay sau khi handshake hoàn tất.
+  - Phase 4.5 (Tích hợp Runtime, CoreApi, Store và CLI):
+    - `Store`: Bổ sung bảng `peers` trong SQLite, lưu trữ trạng thái peer và danh sách `manual_peers` trong `meta`.
+    - `CoreApi`: Bổ sung các phương thức quản lý peer `peers()`, `put_peer()`, `delete_peer()`, `manual_peers()`, `add_manual_peer()`, `remove_manual_peer()`.
+    - `Runtime`: Khởi tạo và liên kết `PeerManager` và `DiscoveryService` trong vòng đời daemon/TUI; thiết lập bộ giám sát IP card mạng định kỳ (10s), tự động gửi beacon cập nhật tức thì khi IP LAN thay đổi.
+    - CLI commands:
+      - `ldns peers [--json]`: Hiển thị danh sách peer đã kết nối, đã khám phá và thêm thủ công.
+      - `ldns peer add <endpoint>`: Thêm peer thủ công cho mạng chặn multicast.
+      - `ldns peer rm <endpoint>`: Xóa peer thủ công.
+      - `ldns peer forget <node_id>`: Quên node khỏi bảng lưu trữ peer.
+- File liên quan:
+  - `CMakeLists.txt`, `tests/CMakeLists.txt`.
+  - `src/core/net/crypto.{hpp,cpp}`, `src/core/net/beacon.{hpp,cpp}`, `src/core/net/discovery.{hpp,cpp}`.
+  - `src/core/net/protocol_message.{hpp,cpp}`, `src/core/net/session.{hpp,cpp}`, `src/core/net/peer_manager.{hpp,cpp}`.
+  - `src/core/store/store.{hpp,cpp}`, `src/core/core_api.{hpp,cpp}`, `src/core/runtime/runtime.{hpp,cpp}`.
+  - `src/core/cli/commands.{hpp,cpp}`, `src/main.cpp`.
+  - `tests/test_beacon.cpp`, `tests/test_discovery.cpp`, `tests/test_protocol_message.cpp`, `tests/test_session.cpp`, `tests/test_peer_manager.cpp`, `tests/test_cli.cpp`.
+- Bug/lỗ hổng phát hiện và đã sửa trong phiên:
+  - MSVC warning C4834 `[[nodiscard]]` trên `crypto::init()` -> thêm `(void)crypto::init();`.
+  - GCC `<algorithm>` thiếu `#include` trong `crypto.cpp` -> thêm header.
+  - Tham số `node_id` không dùng trong `dial_peer()` -> thêm `(void)node_id;`.
+  - Tranh chấp cổng động ngẫu nhiên trong test DNS server -> xác nhận socket teardown sạch.
+- Kết quả kiểm chứng:
+  - Windows MSVC Debug: 175/175 test cases, 2252 assertions PASS (100%).
+  - Linux WSL GCC 13 Debug: 175/175 test cases PASS (100%).
+  - Linux WSL Clang AddressSanitizer + UndefinedBehaviorSanitizer: 175/175 test cases PASS (100%), không phát hiện rò rỉ bộ nhớ hay lỗi bộ nhớ.
+  - Kiểm thử trực tiếp CLI: Các lệnh `ldns peers`, `ldns peer add`, `ldns peer rm`, `ldns peer forget` đều chạy mượt mà ở cả chế độ bảng và chế độ JSON.
+- Tiếp theo: Sẵn sàng đề xuất commit Milestone 4 cho người dùng, sau đó tiến hành Milestone 5 (Đồng bộ Registry real-time theo docs/PLAN.md §M5).

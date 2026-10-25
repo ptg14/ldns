@@ -23,6 +23,8 @@
 #include "core/config/paths.hpp"
 #include "core/core_api.hpp"
 #include "core/server/dns_server.hpp"
+#include "core/net/discovery.hpp"
+#include "core/net/peer_manager.hpp"
 #include "core/util/result.hpp"
 
 namespace ldns {
@@ -71,6 +73,8 @@ public:
     CoreApi& api() noexcept { return *api_; }
     asio::io_context& io() noexcept { return io_; }
     const std::vector<std::string>& bound_addresses() const;
+    net::PeerManager* peer_manager() noexcept { return peer_manager_.get(); }
+    net::DiscoveryService* discovery() noexcept { return discovery_.get(); }
 
 private:
     Runtime(RuntimeOptions options, std::unique_ptr<CoreApi> api);
@@ -94,6 +98,11 @@ private:
     bool console_handler_installed_{false};
 #endif
     std::vector<std::string> bound_;
+    void start_interface_monitor();
+
+    std::shared_ptr<net::PeerManager> peer_manager_;
+    std::shared_ptr<net::DiscoveryService> discovery_;
+    std::unique_ptr<asio::steady_timer> interface_monitor_timer_;
 };
 
 }  // namespace ldns

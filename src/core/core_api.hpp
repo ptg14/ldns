@@ -86,6 +86,15 @@ public:
     // updated; also refreshes the cached self_addresses in NodeStatus.
     Result<std::size_t> refresh_self_addresses();
 
+    // --- peers -------------------------------------------------------------
+    Result<std::vector<StoredPeer>> peers();
+    Result<void> put_peer(const StoredPeer& peer);
+    Result<bool> delete_peer(const NodeId& node_id);
+
+    Result<std::vector<std::string>> manual_peers() const;
+    Result<void> add_manual_peer(std::string_view endpoint);
+    Result<void> remove_manual_peer(std::string_view endpoint);
+
     // --- import/export -----------------------------------------------------
     Result<domain::ImportReport> import_file(const std::string& path, bool force);
     Result<domain::ImportReport> import_text(std::string_view text, bool toml_format, bool force);
