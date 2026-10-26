@@ -74,6 +74,11 @@ public:
 
     std::uint16_t bound_port() const;
 
+    using SyncMessageHandler = std::function<void(std::shared_ptr<Session>, const ParsedMessage&)>;
+    void set_sync_handler(SyncMessageHandler handler);
+    void broadcast_frame(std::vector<std::uint8_t> frame, const NodeId* exclude_peer1 = nullptr,
+                         const NodeId* exclude_peer2 = nullptr);
+
 private:
     PeerManager(asio::io_context& io, PeerManagerConfig config, PeerEventCallback on_event);
 
@@ -92,6 +97,7 @@ private:
     asio::io_context& io_;
     PeerManagerConfig config_;
     PeerEventCallback on_event_;
+    SyncMessageHandler sync_handler_;
     std::array<std::uint8_t, 8> net_hash_{};
 
     asio::ip::tcp::acceptor acceptor_;

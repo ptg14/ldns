@@ -125,16 +125,16 @@ Mục tiêu: chứng minh vẽ được "vùng động" cố định ở đáy +
 
 ### M5 — Đồng bộ Registry real-time (2 tuần)
 **Task**
-- [ ] `Registry`: `OwnerState`, áp dụng op, cấu trúc đọc không khóa (snapshot bất biến/RCU) cho hot-path DNS.
-- [ ] Bảng `peers`, `peer_records` (lưu bền registry để khởi động nhanh).
-- [ ] Op log của owner (put/del), tăng `seq` trong cùng transaction với thay đổi `my_records`.
-- [ ] `SYNC_REQ` / `SYNC_DATA` (delta + snapshot chia khúc), `UPDATE` đẩy tức thì.
-- [ ] Phát hiện lỗ hổng seq, xử lý `epoch`.
-- [ ] Relay gossip + dedupe `(owner,epoch,seq)`.
-- [ ] Cập nhật `self` khi đổi IP → phát UPDATE + beacon.
-- [ ] Giữ owner offline theo `offline_retention`; dọn dẹp.
-- [ ] Sự kiện `RecordPut/Del{owner}` → TUI/CLI `--follow`; invalid hóa cache.
-- [ ] Test mô phỏng: N node, mất gói, chia mạng, khởi động lại ngẫu nhiên → **hội tụ**.
+- [x] `Registry`: `OwnerState`, áp dụng op, cấu trúc đọc không khóa (snapshot bất biến/RCU) cho hot-path DNS.
+- [x] Bảng `peers`, `peer_records` (lưu bền registry để khởi động nhanh).
+- [x] Op log của owner (put/del), tăng `seq` trong cùng transaction với thay đổi `my_records`.
+- [x] `SYNC_REQ` / `SYNC_DATA` (delta + snapshot chia khúc), `UPDATE` đẩy tức thì.
+- [x] Phát hiện lỗ hổng seq, xử lý `epoch`.
+- [x] Relay gossip + dedupe `(owner,epoch,seq)`.
+- [x] Cập nhật `self` khi đổi IP → phát UPDATE + beacon.
+- [x] Giữ owner offline theo `offline_retention`; dọn dẹp.
+- [x] Sự kiện `RecordPut/Del{owner}` → TUI/CLI `--follow`; invalid hóa cache.
+- [x] Test mô phỏng: N node, mất gói, chia mạng, khởi động lại ngẫu nhiên → **hội tụ**.
 **Nghiệm thu:** AC-2.2, 2.3, 2.5, 2.7; node mới đồng bộ 10 000 record < 2 s; benchmark độ trễ lan truyền < 500 ms.
 
 ### M6 — PeerResolver: bỏ phiếu + xếp hạng + hedging (1,5 tuần)

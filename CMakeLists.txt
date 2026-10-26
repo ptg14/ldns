@@ -93,6 +93,8 @@ add_library(ldns_core STATIC
     src/core/net/protocol_message.cpp
     src/core/net/session.cpp
     src/core/net/peer_manager.cpp
+    src/core/registry/registry.cpp
+    src/core/registry/sync_manager.cpp
 )
 target_include_directories(ldns_core PUBLIC src)
 target_link_libraries(ldns_core PUBLIC

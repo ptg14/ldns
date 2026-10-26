@@ -344,7 +344,31 @@ void PeerManager::on_session_closed(std::shared_ptr<Session> session, std::strin
     }
 }
 
-void PeerManager::on_session_message(std::shared_ptr<Session> /*session*/, const ParsedMessage& msg) {
+void PeerManager::set_sync_handler(SyncMessageHandler handler) {
+    std::lock_guard lock(mutex_);
+    sync_handler_ = std::move(handler);
+}
+
+void PeerManager::broadcast_frame(std::vector<std::uint8_t> frame, const NodeId* exclude_peer1,
+                                  const NodeId* exclude_peer2) {
+    std::vector<std::shared_ptr<Session>> targets;
+    {
+        std::lock_guard lock(mutex_);
+        for (const auto& [_, session] : active_sessions_) {
+            if (session && session->state() == SessionState::Established) {
+                const auto& pid = session->peer_node_id();
+                if (exclude_peer1 && pid == *exclude_peer1) continue;
+                if (exclude_peer2 && pid == *exclude_peer2) continue;
+                targets.push_back(session);
+            }
+        }
+    }
+    for (const auto& s : targets) {
+        s->send_frame(frame);
+    }
+}
+
+void PeerManager::on_session_message(std::shared_ptr<Session> session, const ParsedMessage& msg) {
     if (msg.type == MessageType::Peers && msg.peers) {
         // Peer exchange: learn about new peers
         for (const auto& item : msg.peers->peers) {
@@ -362,6 +386,15 @@ void PeerManager::on_session_message(std::shared_ptr<Session> /*session*/, const
                 }
             }
         }
+    }
+
+    SyncMessageHandler handler;
+    {
+        std::lock_guard lock(mutex_);
+        handler = sync_handler_;
+    }
+    if (handler) {
+        handler(session, msg);
     }
 }
 

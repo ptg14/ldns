@@ -265,6 +265,17 @@ Result<DomainEntry> DomainService::upsert(const AddRequest& request, bool must_n
     const auto seq = store_.bump_seq();
     if (!seq) return Error{707, seq.error().message};
 
+    OpLogRow op_log;
+    op_log.seq = seq.value();
+    op_log.op = "put";
+    op_log.name = row.name;
+    op_log.type = row.type;
+    op_log.ttl = row.ttl;
+    op_log.data = row.data;
+    op_log.created_at = row.created;
+    op_log.ts = row.updated;
+    if (auto status = store_.log_op(op_log); !status) return Error{707, status.error().message};
+
     if (auto status = transaction.commit(); !status) return Error{707, status.error().message};
 
     // The DB is authoritative at this point; mirror into the live zone. A
@@ -292,6 +303,18 @@ Result<DomainEntry> DomainService::upsert(const AddRequest& request, bool must_n
         event.name = entry.name;
         event.type = entry.type;
         events_(event);
+    }
+
+    if (sync_broadcaster_) {
+        net::Op op;
+        op.op = "put";
+        op.name = row.name;
+        op.type = row.type;
+        op.ttl = row.ttl;
+        op.data = row.data;
+        op.created = row.created;
+        op.ts = row.updated;
+        sync_broadcaster_({std::move(op)});
     }
     return entry;
 }
@@ -331,6 +354,17 @@ Result<void> DomainService::remove(std::string_view name, std::string_view type)
     const auto seq = store_.bump_seq();
     if (!seq) return Error{707, seq.error().message};
 
+    OpLogRow op_log;
+    op_log.seq = seq.value();
+    op_log.op = "del";
+    op_log.name = normalized;
+    op_log.type = parsed_type.value();
+    op_log.ttl = 0;
+    op_log.data = {};
+    op_log.created_at = 0;
+    op_log.ts = clock_.now();
+    if (auto status = store_.log_op(op_log); !status) return Error{707, status.error().message};
+
     if (auto status = transaction.commit(); !status) return Error{707, status.error().message};
 
     zone_.apply_remove(parsed_name.value(), parsed_type.value());
@@ -342,6 +376,18 @@ Result<void> DomainService::remove(std::string_view name, std::string_view type)
         event.name = normalized;
         event.type = user_type_name(parsed_type.value());
         events_(event);
+    }
+
+    if (sync_broadcaster_) {
+        net::Op op;
+        op.op = "del";
+        op.name = normalized;
+        op.type = parsed_type.value();
+        op.ttl = 0;
+        op.data = {};
+        op.created = 0;
+        op.ts = clock_.now();
+        sync_broadcaster_({std::move(op)});
     }
     return {};
 }
@@ -460,6 +506,21 @@ Result<DomainService::BulkResult> DomainService::add_many(const std::vector<AddR
     const auto seq = store_.bump_seq();
     if (!seq) return Error{707, seq.error().message};
 
+    for (const auto& item : pending) {
+        OpLogRow op_log;
+        op_log.seq = seq.value();
+        op_log.op = "put";
+        op_log.name = item.row.name;
+        op_log.type = item.row.type;
+        op_log.ttl = item.row.ttl;
+        op_log.data = item.row.data;
+        op_log.created_at = item.row.created;
+        op_log.ts = item.row.updated;
+        if (auto status = store_.log_op(op_log); !status) {
+            return Error{707, status.error().message};
+        }
+    }
+
     if (auto status = transaction.commit(); !status) return Error{707, status.error().message};
 
     // Mirror only after the commit: the zone never serves uncommitted rows.
@@ -483,6 +544,23 @@ Result<DomainService::BulkResult> DomainService::add_many(const std::vector<AddR
             event.type = user_type_name(item.row.type);
             events_(event);
         }
+    }
+
+    if (sync_broadcaster_) {
+        std::vector<net::Op> ops;
+        ops.reserve(pending.size());
+        for (const auto& item : pending) {
+            net::Op op;
+            op.op = "put";
+            op.name = item.row.name;
+            op.type = item.row.type;
+            op.ttl = item.row.ttl;
+            op.data = item.row.data;
+            op.created = item.row.created;
+            op.ts = item.row.updated;
+            ops.push_back(std::move(op));
+        }
+        sync_broadcaster_(ops);
     }
     return BulkResult{pending.size(), seq.value()};
 }
@@ -572,6 +650,22 @@ Result<std::size_t> DomainService::refresh_self_records(
 
     const auto seq = store_.bump_seq();
     if (!seq) return Error{707, seq.error().message};
+
+    for (const auto& row : updated_rows) {
+        OpLogRow op_log;
+        op_log.seq = seq.value();
+        op_log.op = "put";
+        op_log.name = row.name;
+        op_log.type = row.type;
+        op_log.ttl = row.ttl;
+        op_log.data = row.data;
+        op_log.created_at = row.created;
+        op_log.ts = row.updated;
+        if (auto status = store_.log_op(op_log); !status) {
+            return Error{707, status.error().message};
+        }
+    }
+
     if (auto status = transaction.commit(); !status) return Error{707, status.error().message};
 
     for (const auto& row : updated_rows) {
@@ -596,6 +690,23 @@ Result<std::size_t> DomainService::refresh_self_records(
             events_(event);
         }
     }
+    if (sync_broadcaster_) {
+        std::vector<net::Op> ops;
+        ops.reserve(updated_rows.size());
+        for (const auto& row : updated_rows) {
+            net::Op op;
+            op.op = "put";
+            op.name = row.name;
+            op.type = row.type;
+            op.ttl = row.ttl;
+            op.data = row.data;
+            op.created = row.created;
+            op.ts = row.updated;
+            ops.push_back(std::move(op));
+        }
+        sync_broadcaster_(ops);
+    }
+
     logger()->info("refreshed {} self record(s)", updated_rows.size());
     return updated_rows.size();
 }

@@ -17,6 +17,7 @@
 #include "core/config/config.hpp"
 #include "core/config/paths.hpp"
 #include "core/dns/local_zone.hpp"
+#include "core/registry/registry.hpp"
 #include "core/domain/domain_service.hpp"
 #include "core/domain/import_export.hpp"
 #include "core/domain/local_zone_sink.hpp"
@@ -110,6 +111,8 @@ public:
     const dns::LocalZone& zone() const noexcept { return zone_; }
 
     Store& store() noexcept { return store_; }
+    Registry& registry() noexcept { return registry_; }
+    const Registry& registry() const noexcept { return registry_; }
     domain::DomainService& domains() noexcept { return service_; }
     HlcClock& clock() noexcept { return clock_; }
 
@@ -137,6 +140,7 @@ private:
     Options options_;
     Store store_;
     dns::LocalZone zone_;
+    Registry registry_;
     // Declared after zone_: the sink holds a reference to it.
     std::unique_ptr<domain::LocalZoneSink> sink_;
     // Declared before service_: DomainService stores a reference to the clock,

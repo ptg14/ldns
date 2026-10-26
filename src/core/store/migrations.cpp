@@ -61,6 +61,35 @@ CREATE TABLE query_log(
     latency_us INTEGER NOT NULL
 );
 CREATE INDEX idx_query_log_ts ON query_log(ts);
+
+CREATE TABLE op_log(
+    seq        INTEGER NOT NULL,
+    op         TEXT    NOT NULL,
+    name       TEXT    NOT NULL,
+    type       INTEGER NOT NULL,
+    ttl        INTEGER NOT NULL DEFAULT 0,
+    data_json  TEXT    NOT NULL DEFAULT '[]',
+    created_at INTEGER NOT NULL DEFAULT 0,
+    ts         INTEGER NOT NULL,
+    PRIMARY KEY (seq, name, type)
+);
+CREATE INDEX idx_op_log_seq ON op_log(seq);
+)sql";
+
+
+constexpr const char* kMigration2 = R"sql(
+CREATE TABLE IF NOT EXISTS op_log(
+    seq        INTEGER NOT NULL,
+    op         TEXT    NOT NULL,
+    name       TEXT    NOT NULL,
+    type       INTEGER NOT NULL,
+    ttl        INTEGER NOT NULL DEFAULT 0,
+    data_json  TEXT    NOT NULL DEFAULT '[]',
+    created_at INTEGER NOT NULL DEFAULT 0,
+    ts         INTEGER NOT NULL,
+    PRIMARY KEY (seq, name, type)
+);
+CREATE INDEX IF NOT EXISTS idx_op_log_seq ON op_log(seq);
 )sql";
 
 Result<void> exec(sqlite3* db, const char* sql) {
@@ -83,6 +112,9 @@ Result<void> migrate(sqlite3* db, int current_version) {
     }
     if (current_version < 1) {
         if (auto status = exec(db, kMigration1); !status) return status;
+    }
+    if (current_version < 2) {
+        if (auto status = exec(db, kMigration2); !status) return status;
     }
     const std::string pragma = "PRAGMA user_version = " + std::to_string(kSchemaVersion);
     return exec(db, pragma.c_str());

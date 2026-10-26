@@ -115,3 +115,107 @@ TEST_CASE("Protocol PEERS exchange message") {
     CHECK(peers_parsed.value().peers->peers[0].sync_port == 5391);
     CHECK(peers_parsed.value().peers->peers[0].node_id == item.node_id);
 }
+
+TEST_CASE("Protocol SYNC_REQ and SYNC_END messages") {
+    // SYNC_REQ
+    SyncReqMessage req;
+    req.id = 42;
+    SyncReqOwner o1;
+    o1.owner.fill(0x11);
+    o1.epoch = 100;
+    o1.since_seq = 50;
+    req.owners.push_back(o1);
+
+    auto frame = encode_sync_req_frame(req);
+    REQUIRE(frame.has_value());
+    std::span<const std::uint8_t> pld(frame.value().data() + 4, frame.value().size() - 4);
+    auto parsed = parse_payload(pld);
+    REQUIRE(parsed.has_value());
+    CHECK(parsed.value().type == MessageType::SyncReq);
+    REQUIRE(parsed.value().sync_req.has_value());
+    CHECK(parsed.value().sync_req->id == 42);
+    REQUIRE(parsed.value().sync_req->owners.size() == 1);
+    CHECK(parsed.value().sync_req->owners[0].owner == o1.owner);
+    CHECK(parsed.value().sync_req->owners[0].epoch == 100);
+    CHECK(parsed.value().sync_req->owners[0].since_seq == 50);
+
+    // SYNC_END
+    SyncEndMessage end_msg;
+    end_msg.id = 42;
+    auto end_frame = encode_sync_end_frame(end_msg);
+    REQUIRE(end_frame.has_value());
+    std::span<const std::uint8_t> end_pld(end_frame.value().data() + 4, end_frame.value().size() - 4);
+    auto end_parsed = parse_payload(end_pld);
+    REQUIRE(end_parsed.has_value());
+    CHECK(end_parsed.value().type == MessageType::SyncEnd);
+    REQUIRE(end_parsed.value().sync_end.has_value());
+    CHECK(end_parsed.value().sync_end->id == 42);
+}
+
+TEST_CASE("Protocol SYNC_DATA and UPDATE messages with Op put/del") {
+    Op put_op;
+    put_op.op = "put";
+    put_op.name = "web.lan";
+    put_op.type = 1; // A
+    put_op.ttl = 300;
+    put_op.data = {{192, 168, 1, 100}};
+    put_op.created = 1000;
+    put_op.ts = 2000;
+
+    Op del_op;
+    del_op.op = "del";
+    del_op.name = "old.lan";
+    del_op.type = 1;
+    del_op.ts = 2050;
+
+    // UPDATE
+    UpdateMessage upd;
+    upd.owner.fill(0x22);
+    upd.epoch = 5;
+    upd.seq = 10;
+    upd.ops = {put_op, del_op};
+
+    auto upd_frame = encode_update_frame(upd);
+    REQUIRE(upd_frame.has_value());
+    std::span<const std::uint8_t> upd_pld(upd_frame.value().data() + 4, upd_frame.value().size() - 4);
+    auto upd_parsed = parse_payload(upd_pld);
+    REQUIRE(upd_parsed.has_value());
+    CHECK(upd_parsed.value().type == MessageType::Update);
+    REQUIRE(upd_parsed.value().update.has_value());
+    CHECK(upd_parsed.value().update->owner == upd.owner);
+    CHECK(upd_parsed.value().update->epoch == 5);
+    CHECK(upd_parsed.value().update->seq == 10);
+    REQUIRE(upd_parsed.value().update->ops.size() == 2);
+    CHECK(upd_parsed.value().update->ops[0].name == "web.lan");
+    CHECK(upd_parsed.value().update->ops[0].op == "put");
+    CHECK(upd_parsed.value().update->ops[0].data[0] == std::vector<std::uint8_t>{192, 168, 1, 100});
+    CHECK(upd_parsed.value().update->ops[1].name == "old.lan");
+    CHECK(upd_parsed.value().update->ops[1].op == "del");
+
+    // SYNC_DATA
+    SyncDataMessage sdata;
+    sdata.id = 99;
+    sdata.owner.fill(0x33);
+    sdata.epoch = 1;
+    sdata.from_seq = 0;
+    sdata.to_seq = 10;
+    sdata.snapshot = true;
+    sdata.chunk = 0;
+    sdata.last = true;
+    sdata.ops = {put_op};
+
+    auto sdata_frame = encode_sync_data_frame(sdata);
+    REQUIRE(sdata_frame.has_value());
+    std::span<const std::uint8_t> sdata_pld(sdata_frame.value().data() + 4, sdata_frame.value().size() - 4);
+    auto sdata_parsed = parse_payload(sdata_pld);
+    REQUIRE(sdata_parsed.has_value());
+    CHECK(sdata_parsed.value().type == MessageType::SyncData);
+    REQUIRE(sdata_parsed.value().sync_data.has_value());
+    CHECK(sdata_parsed.value().sync_data->id == 99);
+    CHECK(sdata_parsed.value().sync_data->owner == sdata.owner);
+    CHECK(sdata_parsed.value().sync_data->snapshot == true);
+    CHECK(sdata_parsed.value().sync_data->chunk == 0);
+    CHECK(sdata_parsed.value().sync_data->last == true);
+    REQUIRE(sdata_parsed.value().sync_data->ops.size() == 1);
+    CHECK(sdata_parsed.value().sync_data->ops[0].name == "web.lan");
+}

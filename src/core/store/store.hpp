@@ -63,6 +63,26 @@ struct StoredPeer {
     std::int64_t last_seen{0};
 };
 
+struct OpLogRow {
+    std::uint64_t seq{0};
+    std::string op; // "put" | "del"
+    std::string name;
+    std::uint16_t type{1};
+    std::uint32_t ttl{0};
+    std::vector<std::vector<std::uint8_t>> data;
+    std::uint64_t created_at{0};
+    std::uint64_t ts{0};
+};
+
+struct PeerRecordRow {
+    NodeId owner_id{};
+    std::string name;
+    std::uint16_t type{1};
+    std::uint32_t ttl{0};
+    std::vector<std::vector<std::uint8_t>> data;
+    std::uint64_t created_at{0};
+};
+
 struct UpstreamRow {
     std::string address;
     std::uint16_t port{53};
@@ -108,6 +128,20 @@ public:
     Result<std::vector<std::string>> manual_peers();
     Result<void> add_manual_peer(std::string_view endpoint);
     Result<void> remove_manual_peer(std::string_view endpoint);
+
+    // --- op_log ------------------------------------------------------------
+    Result<void> log_op(const OpLogRow& row);
+    Result<std::vector<OpLogRow>> ops_since(std::uint64_t since_seq, std::uint64_t max_seq = UINT64_MAX);
+    Result<std::uint64_t> oldest_op_seq();
+    Result<void> purge_op_log_before(std::uint64_t before_seq);
+
+    // --- peer_records ------------------------------------------------------
+    Result<std::vector<PeerRecordRow>> peer_records(const NodeId& owner_id);
+    Result<std::vector<PeerRecordRow>> all_peer_records();
+    Result<void> put_peer_record(const PeerRecordRow& row);
+    Result<bool> delete_peer_record(const NodeId& owner_id, std::string_view name, std::uint16_t type);
+    Result<void> replace_peer_records(const NodeId& owner_id, const std::vector<PeerRecordRow>& rows);
+    Result<void> delete_peer_records_for_owner(const NodeId& owner_id);
 
     // --- upstreams ---------------------------------------------------------
     Result<std::vector<UpstreamRow>> upstreams();

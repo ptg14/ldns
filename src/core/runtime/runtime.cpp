@@ -201,11 +201,39 @@ Result<void> Runtime::start() {
                                std::chrono::system_clock::now().time_since_epoch())
                                .count();
             (void)api_->put_peer(sp);
+
+            if (sync_manager_) {
+                sync_manager_->on_peer_event(peer, online);
+            }
         });
 
     if (auto status = peer_manager_->start(); !status) {
         logger()->warn("failed to start peer manager: {}", status.error().message);
     }
+
+    // Start SyncManager
+    SyncManagerOptions sm_opts;
+    sm_opts.self_id = api_->status().node_id;
+    sm_opts.self_name = hostname;
+    sm_opts.self_epoch = api_->status().epoch;
+    sm_opts.offline_retention = std::chrono::seconds(api_->config().peers.offline_retention_seconds);
+
+    sync_manager_ = SyncManager::create(
+        std::move(sm_opts), api_->store(), api_->registry(), peer_manager_,
+        [this](const std::string& name) {
+            auto parsed = dns::Name::from_presentation(name);
+            if (parsed) api_->cache().invalidate(parsed.value());
+        });
+
+    sync_manager_->start();
+
+    // Wire DomainService local mutations to SyncManager broadcast
+    api_->domains().set_sync_broadcaster(
+        [this](const std::vector<net::Op>& ops) {
+            if (sync_manager_) {
+                (void)sync_manager_->broadcast_local_update(ops);
+            }
+        });
 
     // Start DiscoveryService
     net::DiscoveryConfig disc_cfg;
@@ -243,6 +271,10 @@ void Runtime::stop() {
     if (discovery_) {
         discovery_->stop();
         discovery_.reset();
+    }
+    if (sync_manager_) {
+        sync_manager_->stop();
+        sync_manager_.reset();
     }
     if (peer_manager_) {
         peer_manager_->stop();

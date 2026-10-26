@@ -474,3 +474,54 @@ Nếu user muốn giữ IP ảo (vd VPN), dùng `network.self_ip = "10.x.x.x"` �
   - Linux WSL Clang AddressSanitizer + UndefinedBehaviorSanitizer: 175/175 test cases PASS (100%), không phát hiện rò rỉ bộ nhớ hay lỗi bộ nhớ.
   - Kiểm thử trực tiếp CLI: Các lệnh `ldns peers`, `ldns peer add`, `ldns peer rm`, `ldns peer forget` đều chạy mượt mà ở cả chế độ bảng và chế độ JSON.
 - Tiếp theo: Sẵn sàng đề xuất commit Milestone 4 cho người dùng, sau đó tiến hành Milestone 5 (Đồng bộ Registry real-time theo docs/PLAN.md §M5).
+
+## 2026-10-26 19:30 — bước quan trọng (Hoàn thành toàn diện Milestone 5: Đồng bộ Registry real-time & OpLog)
+- Việc đã làm:
+  - Phase 5.1 (Wire Codec & Messages):
+    - Bổ sung cấu trúc `Op` (`put`/`del`), `SyncReqOwner`, `SyncReqMessage` (`t:"SYNC_REQ"`), `SyncDataMessage` (`t:"SYNC_DATA"`), `SyncEndMessage` (`t:"SYNC_END"`), `UpdateMessage` (`t:"UPDATE"`).
+    - Hỗ trợ mã hóa/giải mã MessagePack đầy đủ với cơ chế chuyển đổi CNAME presentation/wire per protocol §2.3.
+    - Viết unit test mở rộng trong `tests/test_protocol_message.cpp`.
+  - Phase 5.2 (Persistence & OpLog):
+    - Nâng cấp phiên bản schema SQLite lên version 2 (`migrations.hpp` / `migrations.cpp`).
+    - Bổ sung bảng `op_log` với index `idx_op_log_seq` (`seq`, `op`, `name`, `type`, `ttl`, `data_json`, `created_at`, `ts`).
+    - Cài đặt đầy đủ các phương thức `Store`: `log_op`, `ops_since`, `oldest_op_seq`, `purge_op_log_before`, `peer_records`, `all_peer_records`, `put_peer_record`, `delete_peer_record`, `replace_peer_records`, `delete_peer_records_for_owner`.
+    - Viết unit test trong `tests/test_store.cpp`.
+  - Phase 5.3 (In-Memory Registry & Snapshot):
+    - Bổ sung `std::hash<ldns::NodeId>` trong `src/core/util/id.hpp`.
+    - Xây dựng `src/core/registry/registry.hpp` và `registry.cpp`:
+      - `OwnerRecord`, `OwnerState`, `RecordClaim`, `RecordEvent`.
+      - `RegistrySnapshot`: Bản chụp bất biến (copy-on-write immutable snapshot) tối ưu cho đường dẫn đọc hiệu năng cao (hot path lookup lock-free); hỗ trợ tra cứu chính xác và leo nhãn tìm wildcard (`*.b.lan`, `*.lan`).
+      - `Registry`: `apply_ops` (kiểm tra epoch, lọc trùng seq, put/del), `reset_owner_snapshot`, `set_owner_online` (theo dõi epoch và seq), `remove_owner`, `purge_offline_owners`, `init_from_store`, thread-safe snapshot rebuild.
+    - Viết unit test trong `tests/test_registry.cpp`.
+  - Phase 5.4 (Sync Engine - SyncManager):
+    - Mở rộng `PeerManager`: bổ sung `broadcast_frame(frame, exclude_peer1, exclude_peer2)` và callback `set_sync_handler`.
+    - Xây dựng `src/core/registry/sync_manager.hpp` và `sync_manager.cpp`:
+      - `send_sync_req`: gửi danh sách các owner đã biết kèm `since_seq` tới peer vừa kết nối.
+      - `handle_sync_req`: tự động chọn gửi delta (nếu `op_log` cục bộ còn nguyên vẹn và <= 1000 compressed ops) hoặc snapshot (chunking <= 1000 ops), kết thúc bằng `SYNC_END`.
+      - `handle_sync_data`: áp dụng delta / snapshot, cập nhật bảng `peer_records` trong SQLite, vô hiệu hóa cache DNS, xử lý các update đang buffer.
+      - `handle_update`: lọc bản tin trùng lặp, phát hiện lỗ hổng tuần tự (`seq > last_seq + 1` -> đưa vào buffer và gửi `SYNC_REQ`), áp dụng các bản tin liên tiếp nguyên tử (`seq == last_seq + 1`), lưu vào store và **chuyển tiếp (gossip relay)** nguyên văn tới các peer lân cận (ngoại trừ node gửi và node sở hữu bản ghi).
+      - `broadcast_local_update`: phát `UpdateMessage` (hoặc proactive snapshot chunks nếu > 1000 ops) tới toàn bộ cluster khi domain cục bộ thay đổi.
+      - `purge_offline`: định kỳ loại bỏ các owner ngoại tuyến quá thời hạn lưu trữ khỏi registry và SQLite.
+  - Phase 5.5 (Tích hợp Runtime & Kiểm thử toàn diện):
+    - Tích hợp `DomainService`: liên kết `set_sync_broadcaster`, tự động ghi log vào `op_log` và tăng `seq` trong cùng transaction SQLite khi có mutation (`upsert`, `remove`, `add_many`, `refresh_self_records`).
+    - Tích hợp `CoreApi`: khởi tạo `Registry` từ SQLite khi khởi động (`init_from_store`).
+    - Tích hợp `Runtime`: khởi tạo `SyncManager`, kết nối với `PeerManager`, xóa `DnsCache` khi registry cập nhật.
+    - Viết bộ kiểm thử tích hợp `tests/test_sync.cpp`: kiểm tra phát hiện gap/buffering, broadcast cục bộ, đồng bộ 2 node và lan truyền gossip qua 3 node (A -> B -> C), dọn dẹp offline purge.
+- File liên quan:
+  - `CMakeLists.txt`, `tests/CMakeLists.txt`, `docs/PLAN.md`.
+  - `src/core/net/protocol_message.{hpp,cpp}`, `src/core/net/peer_manager.{hpp,cpp}`.
+  - `src/core/store/migrations.{hpp,cpp}`, `src/core/store/store.{hpp,cpp}`.
+  - `src/core/util/id.hpp`.
+  - `src/core/registry/registry.{hpp,cpp}`, `src/core/registry/sync_manager.{hpp,cpp}`.
+  - `src/core/domain/domain_service.{hpp,cpp}`, `src/core/core_api.{hpp,cpp}`, `src/core/runtime/runtime.{hpp,cpp}`.
+  - `tests/test_protocol_message.cpp`, `tests/test_store.cpp`, `tests/test_registry.cpp`, `tests/test_sync.cpp`.
+- Bug/lỗ hổng phát hiện và đã sửa trong phiên:
+  - SQLite signed 64-bit integer overflow: `UINT64_MAX` ép kiểu trực tiếp sang `sqlite3_int64` bị tràn thành `-1LL`, khiến câu lệnh `ops_since` trả về rỗng -> kẹp `since_seq` và `max_seq` bằng `std::min<std::uint64_t>(seq, INT64_MAX)`.
+  - Yêu cầu transaction đối với `Store::bump_seq()`: `bump_seq()` yêu cầu transaction SQLite đang mở (`store.begin()`), gọi ngoài transaction báo lỗi 408.
+  - Cảnh báo GCC `-Werror=missing-field-initializers`: khởi tạo aggregate `PeerManagerConfig` thiếu trường -> chuyển sang gán từng trường minh thị.
+  - Tính nhất quán epoch giữa các thành phần: `PeerManagerConfig.my_epoch`, `SyncManagerOptions.self_epoch` và `Store::identity().epoch` phải luôn đồng bộ từ DB; `set_owner_online` khởi tạo đúng epoch và seq được thông báo từ bản tin HELLO.
+- Kết quả kiểm chứng:
+  - Windows MSVC Debug: 190/190 test cases, 2458 assertions PASS (100%).
+  - Linux WSL GCC 13 Debug: 190/190 test cases PASS (100%).
+  - Linux WSL Clang ASan + UBSan: 190/190 test cases PASS (100%), không phát hiện rò rỉ hay lỗi bộ nhớ.
+- Tiếp theo: Sẵn sàng đề xuất commit Milestone 5 cho người dùng, sau đó bắt đầu Milestone 6 (PeerResolver: Voting + Ranking + Hedging theo docs/PLAN.md §M6).

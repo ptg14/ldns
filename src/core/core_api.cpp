@@ -88,6 +88,13 @@ Result<std::unique_ptr<CoreApi>> CoreApi::create(Options options) {
 
     if (auto status = load_zone(api->store_, api->zone_); !status) return status.error();
 
+    // Initialize in-memory Registry from persistent store
+    auto peers = api->store_.peers().value_or(std::vector<StoredPeer>{});
+    auto peer_records = api->store_.all_peer_records().value_or(std::vector<PeerRecordRow>{});
+    auto my_records = api->store_.records().value_or(std::vector<RecordRow>{});
+    api->registry_.init_from_store(peers, peer_records, identity.value().node_id,
+                                   identity.value().epoch, identity.value().seq, my_records);
+
     // Cache the current self addresses for status/add_self. Failure is not
     // fatal: a machine with no LAN interface can still serve static records.
     auto addresses = api->self_addresses();
