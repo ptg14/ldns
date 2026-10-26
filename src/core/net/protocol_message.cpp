@@ -3,6 +3,7 @@
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include "core/dns/name.hpp"
+#include "core/dns/message.hpp"
 
 using json = nlohmann::json;
 
@@ -270,6 +271,55 @@ Result<std::vector<std::uint8_t>> encode_update_frame(const UpdateMessage& msg) 
     return frame_payload(payload);
 }
 
+Result<std::vector<std::uint8_t>> encode_resolve_frame(const ResolveMessage& msg) {
+    json j;
+    j["t"] = "RESOLVE";
+    j["id"] = msg.id;
+    j["name"] = msg.name;
+    j["type"] = msg.type;
+    std::vector<std::uint8_t> payload;
+    json::to_msgpack(j, payload);
+    return frame_payload(payload);
+}
+
+Result<std::vector<std::uint8_t>> encode_resolve_response_frame(const ResolveResponseMessage& msg) {
+    json j;
+    j["t"] = "RESOLVE_R";
+    j["id"] = msg.id;
+    j["rcode"] = msg.rcode;
+    j["epoch"] = msg.epoch;
+    j["seq"] = msg.seq;
+
+    json answers_arr = json::array();
+    for (const auto& a : msg.answers) {
+        json item;
+        item["name"] = a.name;
+        item["type"] = a.type;
+        item["ttl"] = a.ttl;
+        json data_arr = json::array();
+        for (const auto& d : a.data) {
+            if (a.type == 5) {
+                std::size_t offset = 0;
+                auto parsed_name = dns::Name::from_wire(d, offset);
+                if (parsed_name) {
+                    data_arr.push_back(parsed_name.value().to_string());
+                } else {
+                    data_arr.push_back(std::string(d.begin(), d.end()));
+                }
+            } else {
+                data_arr.push_back(json::binary(d));
+            }
+        }
+        item["data"] = std::move(data_arr);
+        answers_arr.push_back(std::move(item));
+    }
+    j["answers"] = std::move(answers_arr);
+
+    std::vector<std::uint8_t> payload;
+    json::to_msgpack(j, payload);
+    return frame_payload(payload);
+}
+
 Result<ParsedMessage> parse_payload(std::span<const std::uint8_t> payload) {
     auto j = json::from_msgpack(payload.begin(), payload.end(), true, false);
     if (j.is_discarded() || !j.is_object()) {
@@ -434,6 +484,66 @@ Result<ParsedMessage> parse_payload(std::span<const std::uint8_t> payload) {
             }
         }
         parsed.update = std::move(upd);
+    } else if (parsed.type_name == "RESOLVE") {
+        parsed.type = MessageType::Resolve;
+        ResolveMessage rmsg;
+        if (j.contains("id") && j["id"].is_number_unsigned()) rmsg.id = j["id"].get<std::uint32_t>();
+        if (j.contains("name") && j["name"].is_string()) rmsg.name = j["name"].get<std::string>();
+        if (j.contains("type")) {
+            if (j["type"].is_number_unsigned()) {
+                rmsg.type = j["type"].get<std::uint16_t>();
+            } else if (j["type"].is_string()) {
+                auto parsed_type = dns::rr_type_from_name(j["type"].get<std::string>());
+                if (parsed_type) rmsg.type = parsed_type.value();
+            }
+        }
+        parsed.resolve = std::move(rmsg);
+    } else if (parsed.type_name == "RESOLVE_R") {
+        parsed.type = MessageType::ResolveResponse;
+        ResolveResponseMessage rresp;
+        if (j.contains("id") && j["id"].is_number_unsigned()) rresp.id = j["id"].get<std::uint32_t>();
+        if (j.contains("rcode") && j["rcode"].is_number_unsigned()) rresp.rcode = j["rcode"].get<std::uint8_t>();
+        if (j.contains("epoch") && j["epoch"].is_number_unsigned()) rresp.epoch = j["epoch"].get<std::uint64_t>();
+        if (j.contains("seq") && j["seq"].is_number_unsigned()) rresp.seq = j["seq"].get<std::uint64_t>();
+        if (j.contains("answers") && j["answers"].is_array()) {
+            for (const auto& aitem : j["answers"]) {
+                if (!aitem.is_object()) continue;
+                ResolveAnswer ans;
+                if (aitem.contains("name") && aitem["name"].is_string()) ans.name = aitem["name"].get<std::string>();
+                if (aitem.contains("type")) {
+                    if (aitem["type"].is_number_unsigned()) {
+                        ans.type = aitem["type"].get<std::uint16_t>();
+                    } else if (aitem["type"].is_string()) {
+                        auto parsed_type = dns::rr_type_from_name(aitem["type"].get<std::string>());
+                        if (parsed_type) ans.type = parsed_type.value();
+                    }
+                }
+                if (aitem.contains("ttl") && aitem["ttl"].is_number_unsigned()) ans.ttl = aitem["ttl"].get<std::uint32_t>();
+                if (aitem.contains("data") && aitem["data"].is_array()) {
+                    for (const auto& dval : aitem["data"]) {
+                        if (dval.is_binary()) {
+                            const auto& b = dval.get_binary();
+                            ans.data.emplace_back(b.begin(), b.end());
+                        } else if (dval.is_string()) {
+                            std::string s = dval.get<std::string>();
+                            if (ans.type == 5) {
+                                auto n = dns::Name::from_presentation(s);
+                                if (n) {
+                                    auto w = n.value().wire();
+                                    ans.data.emplace_back(w.begin(), w.end());
+                                } else {
+                                    ans.data.emplace_back(s.begin(), s.end());
+                                }
+                            } else {
+                                ans.data.emplace_back(s.begin(), s.end());
+                            }
+                        }
+                    }
+                }
+                rresp.answers.push_back(std::move(ans));
+            }
+        }
+        parsed.resolve_response = std::move(rresp);
     } else {
         parsed.type = MessageType::Unknown;
     }

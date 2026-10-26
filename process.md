@@ -525,3 +525,54 @@ Nếu user muốn giữ IP ảo (vd VPN), dùng `network.self_ip = "10.x.x.x"` �
   - Linux WSL GCC 13 Debug: 190/190 test cases PASS (100%).
   - Linux WSL Clang ASan + UBSan: 190/190 test cases PASS (100%), không phát hiện rò rỉ hay lỗi bộ nhớ.
 - Tiếp theo: Sẵn sàng đề xuất commit Milestone 5 cho người dùng, sau đó bắt đầu Milestone 6 (PeerResolver: Voting + Ranking + Hedging theo docs/PLAN.md §M6).
+
+## 2026-10-26 — Phiên làm việc: Hoàn thành Milestone 6 (PeerResolver: Voting + Ranking + Hedging)
+- Mục tiêu: Hoàn thành trọn vẹn Milestone 6 (M6) theo `docs/PLAN.md` §M6, `docs/SPEC.md` §6.2d, §6.3, §6.4, §8, và `docs/protocol.md` §2.4, §6.6, §8:
+  - Wire codec cho bản tin mạng `RESOLVE` & `RESOLVE_R` qua `Session`.
+  - Bộ máy bỏ phiếu và xếp hạng thuần túy `PeerRanking` (`rank_peer_claims`) dựa trên nhóm RRset chuẩn hóa (SPEC §6.2.2c, protocol §8.4).
+  - Động cơ giải quyết phân tán `PeerResolver`: hedging (`hedge_ms`), tổng ngân sách phân giải (`budget_ms`), chế độ `serve_stale` cho owner ngoại tuyến, và theo dõi xung đột (`ConflictRecord`).
+  - Tích hợp pipeline DNS Bước 2 ($Local \rightarrow Peer \rightarrow Upstream$), bám đuôi chuỗi CNAME qua các peer (tối đa 8 hop) và nạp bộ nhớ đệm `DnsCache` với `min(ttl, 30s)`.
+  - Lệnh CLI `ldns conflicts [--json]` và `ldns info <domain> [--type <type>] [--json]`.
+  - Kiểm thử đa node đầu-cuối `tests/test_peer_e2e.cpp` chứng minh toàn bộ các kịch bản AC-1.2, AC-1.3, AC-1.4 và Hedging.
+- Đã thực hiện:
+  - Phase 6.1 (Wire Codec cho RESOLVE / RESOLVE_R):
+    - Mở rộng `src/core/net/protocol_message.{hpp,cpp}`: bổ sung `ResolveMessage` (`t:"RESOLVE"`), `ResolveResponseMessage` (`t:"RESOLVE_R"`), encoders `encode_resolve_frame()` và `encode_resolve_response_frame()`, cập nhật `parse_payload()`.
+    - Viết unit test trong `tests/test_protocol_message.cpp`.
+  - Phase 6.2 (Thuật toán xếp hạng & gom nhóm thuần túy `PeerRanking`):
+    - Triển khai `src/core/resolver/peer_ranking.{hpp,cpp}`:
+      - `canonicalize_rrset_data`: chuẩn hóa dữ liệu bản ghi theo thứ tự byte tăng dần và loại bỏ trùng lặp (bỏ qua TTL).
+      - `rank_peer_claims`: gom nhóm theo `(type, canonical_data)`, xếp hạng nhóm tất định: `vote_count` giảm dần $\rightarrow$ `oldest_claim_created` tăng dần $\rightarrow$ `lowest_node_id` tăng dần; sắp xếp ứng viên trong nhóm: `rtt_ms` tăng dần $\rightarrow$ `node_id` tăng dần; phát hiện xung đột và sai khác với zone cục bộ (`local_divergence`).
+    - Viết unit test trong `tests/test_peer_ranking.cpp`.
+  - Phase 6.3 (Mạng PeerManager cho RESOLVE & RESOLVE_R):
+    - Cập nhật `src/core/net/peer_manager.{hpp,cpp}`: hỗ trợ `send_to_peer(peer_id, frame)` và `set_resolve_handlers(req_handler, resp_handler)`, định tuyến bản tin RESOLVE/RESOLVE_R qua phiên TCP.
+  - Phase 6.4 (Động cơ PeerResolver & Tích hợp Pipeline Bước 2):
+    - Triển khai `src/core/resolver/peer_resolver.{hpp,cpp}`:
+      - Fast-path không qua mạng nếu registry không có claim cho domain.
+      - Chế độ `serve_stale` dự phòng cho các owner ngoại tuyến khi không có node online nào giữ claim.
+      - Duyệt các nhóm ứng viên theo thứ hạng, phát truy vấn kèm cơ chế hedging (`hedge_ms`) khi node đầu tiên trễ, bảo đảm tổng ngân sách `budget_ms`.
+      - Xử lý bản tin yêu cầu `handle_resolve_request`: chỉ truy vấn duy nhất `LocalZone` (chống vòng lặp phân giải phân tán theo SPEC §6.3.3 và §8.2).
+      - Quản lý và lưu trữ xung đột `conflicts()`, `get_conflict()`, `clear_conflicts()`.
+    - Tích hợp Bước 2 trong `src/core/resolver/pipeline.cpp`:
+      - Nạp kết quả từ peer vào `DnsCache` với TTL bị giới hạn ở 30s (`min(ttl, peer_ttl_cap)`).
+      - Hỗ trợ bám đuôi CNAME qua peer (tối đa 8 hop).
+    - Mở rộng `CoreApi` (`src/core/core_api.{hpp,cpp}`) và `Runtime` (`src/core/runtime/runtime.{hpp,cpp}`): kết nối `peer_resolver` với `peer_manager` và `sync_manager`.
+    - Viết unit test trong `tests/test_peer_resolver.cpp`.
+  - Phase 6.5 (CLI Commands: conflicts & info):
+    - Thêm phương thức `domain_info` vào `CoreApi` và tách hàm tiện ích chuẩn hóa hiển thị `dns::format_rdata` trong `src/core/dns/message.{hpp,cpp}`.
+    - Triển khai lệnh `ldns conflicts [--json]` và `ldns info <domain> [--type <type>] [--json]` trong `src/core/cli/commands.{hpp,cpp}` và `src/main.cpp`.
+    - Bổ sung unit test trong `tests/test_cli.cpp`.
+  - Phase 6.6 (Kiểm thử tích hợp đa node End-to-End):
+    - Triển khai `tests/test_peer_e2e.cpp` bao quát 4 kịch bản nghiệm thu lớn:
+      - Scenario 1 (AC-1.2): 2 node phân giải qua mạng peer, giới hạn TTL 30s và kiểm chứng cache hit ở lần truy vấn kế tiếp.
+      - Scenario 2 (AC-1.3): 3 node phân giải tên miền xung đột, kiểm chứng luật phân giải bẻ hòa (tie-breaking) tất định và ghi nhận `ConflictRecord`.
+      - Scenario 3 (AC-1.4): CNAME chain qua các peer độc lập (Node A giữ CNAME, Node B giữ A record, Node C phân giải trọn vẹn).
+      - Scenario 4: Hedging truy vấn khi peer đầu tiên bị trễ mạng (300ms > 60ms hedge timer), node thứ hai lập tức trả lời và hoàn tất dưới 280ms.
+- Bug/lỗ hổng phát hiện và đã sửa trong phiên:
+  - Windows SDK Macro Collision (`RrType::TXT`): Windows header `<wingdi.h>` định nghĩa macro `#define TXT ...`, gây xung đột trình biên dịch MSVC tại các mệnh đề switch-case -> chuyển `format_rdata` sang `src/core/dns/message.cpp` nơi không bị macro Windows gây ô nhiễm, loại bỏ hoàn toàn trùng lặp mã.
+  - Snapshot dereference: `CoreApi::domain_info` gọi `rank_peer_claims` cần truyền `*snapshot` (`const RegistrySnapshot&`) thay vì con trỏ `shared_ptr`.
+  - Kết nối sự kiện kết nối peer với SyncManager: `TestNode` ban đầu không truyền callback sự kiện vào `PeerManager`, khiến `sync->on_peer_event` không được kích hoạt khi phiên TCP được thiết lập -> kết nối `sync->on_peer_event` trong lambda callback của `PeerManager`.
+- Kết quả kiểm chứng:
+  - Windows MSVC Debug: 203/203 test cases, 2677 assertions PASS (100%).
+  - Linux WSL GCC 13 Debug: 203/203 test cases PASS (100%).
+  - Linux WSL Clang ASan + UBSan: 203/203 test cases PASS (100%), sạch hoàn toàn lỗi bộ nhớ và undefined behavior.
+- Tiếp theo: Sẵn sàng đề xuất commit Milestone 6 cho người dùng, sau đó sẵn sàng tiến tới Milestone 7 (TUI kiểu Claude Code) hoặc các hạng mục tiếp theo.

@@ -1,5 +1,6 @@
 #include "doctest.hpp"
 
+#include "core/dns/name.hpp"
 #include "core/net/protocol_message.hpp"
 
 using namespace ldns;
@@ -218,4 +219,64 @@ TEST_CASE("Protocol SYNC_DATA and UPDATE messages with Op put/del") {
     CHECK(sdata_parsed.value().sync_data->last == true);
     REQUIRE(sdata_parsed.value().sync_data->ops.size() == 1);
     CHECK(sdata_parsed.value().sync_data->ops[0].name == "web.lan");
+
+    // RESOLVE
+    ResolveMessage rmsg;
+    rmsg.id = 42;
+    rmsg.name = "app.lan";
+    rmsg.type = 1; // A
+
+    auto rmsg_frame = encode_resolve_frame(rmsg);
+    REQUIRE(rmsg_frame.has_value());
+    std::span<const std::uint8_t> rmsg_pld(rmsg_frame.value().data() + 4, rmsg_frame.value().size() - 4);
+    auto rmsg_parsed = parse_payload(rmsg_pld);
+    REQUIRE(rmsg_parsed.has_value());
+    CHECK(rmsg_parsed.value().type == MessageType::Resolve);
+    REQUIRE(rmsg_parsed.value().resolve.has_value());
+    CHECK(rmsg_parsed.value().resolve->id == 42);
+    CHECK(rmsg_parsed.value().resolve->name == "app.lan");
+    CHECK(rmsg_parsed.value().resolve->type == 1);
+
+    // RESOLVE_R
+    ResolveResponseMessage rresp;
+    rresp.id = 42;
+    rresp.rcode = 0;
+    rresp.epoch = 100;
+    rresp.seq = 200;
+
+    ResolveAnswer a1;
+    a1.name = "app.lan";
+    a1.type = 1;
+    a1.ttl = 300;
+    a1.data = {{10, 0, 0, 1}};
+
+    ResolveAnswer a2;
+    a2.name = "alias.lan";
+    a2.type = 5; // CNAME
+    a2.ttl = 60;
+    auto cname_target = dns::Name::from_presentation("app.lan").value();
+    auto cname_wire = cname_target.wire();
+    a2.data = {std::vector<std::uint8_t>(cname_wire.begin(), cname_wire.end())};
+
+    rresp.answers = {a1, a2};
+
+    auto rresp_frame = encode_resolve_response_frame(rresp);
+    REQUIRE(rresp_frame.has_value());
+    std::span<const std::uint8_t> rresp_pld(rresp_frame.value().data() + 4, rresp_frame.value().size() - 4);
+    auto rresp_parsed = parse_payload(rresp_pld);
+    REQUIRE(rresp_parsed.has_value());
+    CHECK(rresp_parsed.value().type == MessageType::ResolveResponse);
+    REQUIRE(rresp_parsed.value().resolve_response.has_value());
+    CHECK(rresp_parsed.value().resolve_response->id == 42);
+    CHECK(rresp_parsed.value().resolve_response->rcode == 0);
+    CHECK(rresp_parsed.value().resolve_response->epoch == 100);
+    CHECK(rresp_parsed.value().resolve_response->seq == 200);
+    REQUIRE(rresp_parsed.value().resolve_response->answers.size() == 2);
+    CHECK(rresp_parsed.value().resolve_response->answers[0].name == "app.lan");
+    CHECK(rresp_parsed.value().resolve_response->answers[0].type == 1);
+    CHECK(rresp_parsed.value().resolve_response->answers[0].ttl == 300);
+    CHECK(rresp_parsed.value().resolve_response->answers[0].data[0] == std::vector<std::uint8_t>{10, 0, 0, 1});
+    CHECK(rresp_parsed.value().resolve_response->answers[1].name == "alias.lan");
+    CHECK(rresp_parsed.value().resolve_response->answers[1].type == 5);
+    CHECK(rresp_parsed.value().resolve_response->answers[1].data[0] == a2.data[0]);
 }

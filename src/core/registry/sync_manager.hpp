@@ -55,6 +55,7 @@ public:
     // Sends SYNC_REQ to a specific session
     void send_sync_req(std::shared_ptr<net::Session> session,
                        std::optional<NodeId> specific_owner = std::nullopt);
+    void request_sync_for_owner(const NodeId& owner_id);
 
     // Periodic maintenance
     void purge_offline(std::int64_t now_ts = 0);

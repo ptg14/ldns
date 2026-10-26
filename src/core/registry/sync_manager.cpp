@@ -488,4 +488,15 @@ void SyncManager::purge_offline(std::int64_t now_ts) {
     }
 }
 
+void SyncManager::request_sync_for_owner(const NodeId& owner_id) {
+    if (!peer_manager_) return;
+    auto peers = peer_manager_->list_peers();
+    for (const auto& p : peers) {
+        if (p.is_online && p.session) {
+            send_sync_req(p.session, owner_id);
+            break;
+        }
+    }
+}
+
 }  // namespace ldns

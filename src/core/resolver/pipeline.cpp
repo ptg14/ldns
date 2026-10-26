@@ -241,6 +241,38 @@ PipelineResult ResolverPipeline::resolve(const dns::Message& query,
                 result.response.authority.insert(result.response.authority.end(),
                                                  peer_res->authority.begin(),
                                                  peer_res->authority.end());
+
+                if (cache_ && !peer_res->answers.empty()) {
+                    cache_->put_positive(current, question.type,
+                                         peer_res->answers,
+                                         peer_res->authority,
+                                         CacheSource::Peer,
+                                         config_.peer_ttl_cap,
+                                         question.qclass);
+                }
+
+                // Check for CNAME in peer response (SPEC §6.3.4)
+                bool found_cname = false;
+                for (const auto& rr : peer_res->answers) {
+                    if (rr.type == static_cast<std::uint16_t>(RrType::CNAME)) {
+                        std::size_t offset = 0;
+                        auto target = Name::from_wire(rr.rdata, offset);
+                        if (target) {
+                            if (std::find(visited.begin(), visited.end(), target.value()) !=
+                                visited.end()) {
+                                loop = true;
+                                break;
+                            }
+                            current = target.value();
+                            found_cname = true;
+                            last_was_cname = true;
+                            break;
+                        }
+                    }
+                }
+                if (loop) break;
+                if (found_cname) continue;
+
                 answered = true;
                 last_was_cname = false;
                 break;

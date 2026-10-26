@@ -77,6 +77,7 @@ public:
     net::PeerManager* peer_manager() noexcept { return peer_manager_.get(); }
     net::DiscoveryService* discovery() noexcept { return discovery_.get(); }
     SyncManager* sync_manager() noexcept { return sync_manager_.get(); }
+    resolver::PeerResolver* peer_resolver() noexcept { return &api_->peer_resolver(); }
 
 private:
     Runtime(RuntimeOptions options, std::unique_ptr<CoreApi> api);

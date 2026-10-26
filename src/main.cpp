@@ -222,6 +222,24 @@ int run_command(const std::string& command, const GlobalOptions& global,
         return cli::kExitOk;
     }
 
+    if (command == "conflicts") {
+        cli::ConflictsOptions opt;
+        opt.json = options.json;
+        auto result = cli::conflicts(core, opt);
+        if (!result) return fail(result.error());
+        return cli::kExitOk;
+    }
+
+    if (command == "info") {
+        cli::InfoOptions opt;
+        opt.name = options.name;
+        opt.type = options.type;
+        opt.json = options.json;
+        auto result = cli::info(core, opt);
+        if (!result) return fail(result.error());
+        return cli::kExitOk;
+    }
+
     if (command == "peer") {
         if (peer_subaction == "add") {
             cli::PeerAddOptions opt;
@@ -337,6 +355,15 @@ int main(int argc, char** argv) {
     auto* peer_forget_cmd = peer_cmd->add_subcommand("forget", "remove a peer from stored registry");
     peer_forget_cmd->add_option("node", options.name, "peer node ID or prefix")->required();
     peer_forget_cmd->add_flag("--json", options.json, "machine-readable output");
+
+    auto* conflicts_cmd = app.add_subcommand("conflicts", "show active domain conflicts between peers");
+    conflicts_cmd->add_flag("--json", options.json, "machine-readable output");
+
+    auto* info_cmd = app.add_subcommand("info", "show peer claims, voting groups, and ranking for a domain");
+    info_cmd->add_option("name", options.name, "domain name")->required();
+    info_cmd->add_option("--type", options.type, "record type (default: A)")->default_val("A");
+    info_cmd->add_flag("--json", options.json, "machine-readable output");
+
     auto* daemon = app.add_subcommand("daemon", "run the DNS server headless");
     daemon->add_flag("--foreground", options.foreground,
                      "stay in the foreground (required until M8)");

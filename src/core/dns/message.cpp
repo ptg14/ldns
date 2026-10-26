@@ -584,6 +584,38 @@ std::string format_ipv6(std::span<const std::uint8_t> bytes) {
     return out;
 }
 
+std::string format_rdata(std::uint16_t type, std::span<const std::uint8_t> rdata) {
+    switch (static_cast<RrType>(type)) {
+        case RrType::A:
+            if (rdata.size() == 4) return format_ipv4(rdata);
+            break;
+        case RrType::AAAA:
+            if (rdata.size() == 16) return format_ipv6(rdata);
+            break;
+        case RrType::CNAME:
+        case RrType::NS:
+        case RrType::PTR: {
+            auto name = decode_rdata_name(rdata);
+            if (name) return name.value().to_string();
+            break;
+        }
+        case RrType::TXT: {
+            auto txt = decode_rdata_txt(rdata);
+            if (txt) return txt.value();
+            break;
+        }
+        default:
+            break;
+    }
+    std::string hex = "\\# " + std::to_string(rdata.size()) + " ";
+    for (std::uint8_t b : rdata) {
+        char buf[3];
+        std::snprintf(buf, sizeof(buf), "%02x", b);
+        hex += buf;
+    }
+    return hex;
+}
+
 std::string_view rr_type_name(std::uint16_t type) {
     switch (static_cast<RrType>(type)) {
         case RrType::A: return "A";

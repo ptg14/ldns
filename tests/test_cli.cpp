@@ -334,3 +334,105 @@ TEST_CASE("CLI peer add, list, rm, forget") {
     REQUIRE(cli::peers(*api.value(), p_opt, ss).has_value());
     CHECK(ss.str().find("no peers") != std::string::npos);
 }
+
+TEST_CASE("CLI conflicts and info commands") {
+    TempDir dir;
+    auto api = CoreApi::create(options_for(dir));
+    REQUIRE(api.has_value());
+
+    std::stringstream ss;
+
+    // 1. Initially no conflicts
+    cli::ConflictsOptions c_opt;
+    c_opt.json = false;
+    REQUIRE(cli::conflicts(*api.value(), c_opt, ss).has_value());
+    CHECK(ss.str().find("no active conflicts") != std::string::npos);
+
+    ss.str("");
+    c_opt.json = true;
+    REQUIRE(cli::conflicts(*api.value(), c_opt, ss).has_value());
+    auto cj = nlohmann::json::parse(ss.str(), nullptr, false);
+    REQUIRE_FALSE(cj.is_discarded());
+    REQUIRE(cj.is_array());
+    CHECK(cj.empty());
+
+    // 2. Info on empty domain
+    ss.str("");
+    cli::InfoOptions i_opt;
+    i_opt.name = "demo.lan";
+    i_opt.type = "A";
+    i_opt.json = false;
+    REQUIRE(cli::info(*api.value(), i_opt, ss).has_value());
+    CHECK(ss.str().find("Domain: demo.lan (A)") != std::string::npos);
+    CHECK(ss.str().find("Local Zone:\n  (none)") != std::string::npos);
+    CHECK(ss.str().find("Conflict: None") != std::string::npos);
+
+    // 3. Add local record and check info again
+    cli::AddOptions add_opt;
+    add_opt.name = "demo.lan";
+    add_opt.targets = {"10.0.0.1"};
+    add_opt.type = "A";
+    add_opt.force = true;
+    REQUIRE(cli::add(*api.value(), add_opt).has_value());
+
+    ss.str("");
+    REQUIRE(cli::info(*api.value(), i_opt, ss).has_value());
+    CHECK(ss.str().find("Local Zone:\n  - 10.0.0.1") != std::string::npos);
+
+    // 4. Add peer claims creating conflict in registry for conflict.lan
+    NodeId peer1{};
+    peer1.fill(0x11);
+    NodeId peer2{};
+    peer2.fill(0x22);
+
+    api.value()->registry().set_owner_online(peer1, true, "peer-1", 100, 1, 0);
+    api.value()->registry().set_owner_online(peer2, true, "peer-2", 100, 1, 0);
+
+    net::Op op1{"put", "conflict.lan", 1, 60, {{10, 0, 0, 1}}, 100, 100};
+    net::Op op2{"put", "conflict.lan", 1, 60, {{10, 0, 0, 2}}, 200, 200};
+    REQUIRE(api.value()->registry().apply_ops(peer1, 1, 1, {op1}).has_value());
+    REQUIRE(api.value()->registry().apply_ops(peer2, 1, 1, {op2}).has_value());
+
+    // Info shows 2 peer groups and conflict detected
+    ss.str("");
+    i_opt.name = "conflict.lan";
+    i_opt.json = false;
+    REQUIRE(cli::info(*api.value(), i_opt, ss).has_value());
+    CHECK(ss.str().find("Group 1") != std::string::npos);
+    CHECK(ss.str().find("Group 2") != std::string::npos);
+    CHECK(ss.str().find("Multiple competing peer groups") != std::string::npos);
+
+    // Info JSON format
+    ss.str("");
+    i_opt.json = true;
+    REQUIRE(cli::info(*api.value(), i_opt, ss).has_value());
+    auto ij = nlohmann::json::parse(ss.str(), nullptr, false);
+    REQUIRE_FALSE(ij.is_discarded());
+    CHECK(ij["name"] == "conflict.lan");
+    CHECK(ij["type"] == "A");
+    CHECK(ij["has_local"] == false);
+    CHECK(ij["has_conflict"] == true);
+    REQUIRE(ij["groups"].is_array());
+    CHECK(ij["groups"].size() == 2);
+
+    // Trigger conflict recording via resolution
+    (void)api.value()->resolve("conflict.lan", "A");
+
+    // Check conflicts command now sees the active conflict
+    ss.str("");
+    c_opt.json = false;
+    auto confs = cli::conflicts(*api.value(), c_opt, ss);
+    REQUIRE(confs.has_value());
+    CHECK(confs.value().size() == 1);
+    CHECK(ss.str().find("Active conflicts (1)") != std::string::npos);
+    CHECK(ss.str().find("conflict.lan") != std::string::npos);
+
+    ss.str("");
+    c_opt.json = true;
+    REQUIRE(cli::conflicts(*api.value(), c_opt, ss).has_value());
+    auto cj2 = nlohmann::json::parse(ss.str(), nullptr, false);
+    REQUIRE_FALSE(cj2.is_discarded());
+    REQUIRE(cj2.size() == 1);
+    CHECK(cj2[0]["name"] == "conflict.lan");
+    CHECK(cj2[0]["type"] == "A");
+}

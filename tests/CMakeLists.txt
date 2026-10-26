@@ -28,6 +28,9 @@ add_executable(ldns_tests
     test_peer_manager.cpp
     test_registry.cpp
     test_sync.cpp
+    test_peer_ranking.cpp
+    test_peer_resolver.cpp
+    test_peer_e2e.cpp
 )
 target_link_libraries(ldns_tests PRIVATE ldns_core doctest::doctest)
 ldns_set_warnings(ldns_tests)

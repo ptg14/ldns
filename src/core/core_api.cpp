@@ -153,6 +153,27 @@ Result<std::unique_ptr<CoreApi>> CoreApi::create(Options options) {
     api->pipeline_ = std::make_shared<resolver::ResolverPipeline>(
         api->zone_, api->cache_, api->upstream_, api->query_log_, pipe_cfg);
 
+    resolver::PeerResolverConfig pres_cfg;
+    pres_cfg.hedge_ms = std::chrono::milliseconds(api->options_.config.peers.hedge_ms);
+    pres_cfg.budget_ms = std::chrono::milliseconds(api->options_.config.peers.budget_ms);
+    pres_cfg.serve_stale = api->options_.config.peers.serve_stale;
+    pres_cfg.peer_ttl_cap = api->options_.config.cache.peer_ttl_cap;
+    pres_cfg.serve_stale_ttl = 10;
+
+    auto reg_ptr = std::shared_ptr<Registry>(&api->registry_, [](Registry*){});
+    api->peer_resolver_ = std::make_shared<resolver::PeerResolver>(
+        reg_ptr,
+        nullptr,
+        api->zone_,
+        pres_cfg,
+        identity.value().epoch,
+        [api_raw = api.get()]() { return api_raw->status().seq; });
+
+    api->pipeline_->set_peer_hook(
+        [pr = api->peer_resolver_](const dns::Name& name, std::uint16_t type,
+                                   std::vector<resolver::TraceHop>& trace) {
+            return pr->resolve(name, type, trace);
+        });
     return api;
 }
 
@@ -176,6 +197,68 @@ Result<resolver::PipelineResult> CoreApi::resolve(std::string_view name_str,
         dns::Question{parsed_name.value(), parsed_type.value(), dns::kClassIn});
 
     return pipeline_->resolve(query, {}, trace);
+}
+
+void CoreApi::set_peer_manager(std::shared_ptr<net::PeerManager> pm) {
+    if (peer_resolver_) {
+        peer_resolver_->set_peer_manager(std::move(pm));
+    }
+}
+
+std::vector<resolver::ConflictRecord> CoreApi::conflicts() const {
+    if (peer_resolver_) {
+        return peer_resolver_->conflicts();
+    }
+    return {};
+}
+
+std::optional<resolver::ConflictRecord> CoreApi::get_conflict(std::string_view name,
+                                                             std::string_view type) const {
+    if (!peer_resolver_) return std::nullopt;
+    auto parsed_name = dns::Name::from_presentation(name);
+    if (!parsed_name) return std::nullopt;
+    auto parsed_type = domain::user_type_from_name(type);
+    if (!parsed_type) return std::nullopt;
+    return peer_resolver_->get_conflict(parsed_name.value(), parsed_type.value());
+}
+
+Result<DomainInfo> CoreApi::domain_info(std::string_view name_str, std::string_view type_str) const {
+    auto parsed_name = dns::Name::from_presentation(name_str);
+    if (!parsed_name) return parsed_name.error();
+
+    auto parsed_type = domain::user_type_from_name(type_str);
+    if (!parsed_type) return parsed_type.error();
+
+    DomainInfo info;
+    info.name = parsed_name.value();
+    info.type = parsed_type.value();
+
+    // 1. Local zone check
+    const std::vector<std::vector<std::uint8_t>>* local_canonical_ptr = nullptr;
+    std::vector<std::vector<std::uint8_t>> local_canonical;
+    auto outcome = zone_.lookup(parsed_name.value(), parsed_type.value());
+    if (outcome.kind == dns::LookupKind::Answer && !outcome.answers.empty()) {
+        info.has_local = true;
+        for (const auto& rr : outcome.answers) {
+            local_canonical.push_back(rr.rdata);
+            info.local_records.push_back(dns::format_rdata(rr.type, rr.rdata));
+        }
+        local_canonical = resolver::canonicalize_rrset_data(std::move(local_canonical));
+        local_canonical_ptr = &local_canonical;
+    }
+
+    // 2. Peer claims from snapshot (all claims evaluated)
+    auto snapshot = registry_.snapshot();
+    info.ranking = resolver::rank_peer_claims(
+        *snapshot, parsed_name.value(), parsed_type.value(), false,
+        {}, local_canonical_ptr);
+
+    if (info.ranking.conflict) {
+        info.has_conflict = true;
+        info.local_divergence = info.ranking.conflict->local_divergence;
+    }
+
+    return info;
 }
 
 Result<domain::DomainEntry> CoreApi::add_domain(domain::AddRequest request) {

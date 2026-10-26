@@ -211,6 +211,15 @@ Result<void> Runtime::start() {
         logger()->warn("failed to start peer manager: {}", status.error().message);
     }
 
+    api_->set_peer_manager(peer_manager_);
+    peer_manager_->set_resolve_handlers(
+        [this](std::shared_ptr<net::Session> session, const net::ResolveMessage& req) {
+            api_->peer_resolver().handle_resolve_request(std::move(session), req);
+        },
+        [this](std::shared_ptr<net::Session> session, const net::ResolveResponseMessage& resp) {
+            api_->peer_resolver().handle_resolve_response(std::move(session), resp);
+        });
+
     // Start SyncManager
     SyncManagerOptions sm_opts;
     sm_opts.self_id = api_->status().node_id;
@@ -226,6 +235,13 @@ Result<void> Runtime::start() {
         });
 
     sync_manager_->start();
+
+    api_->peer_resolver().set_sync_trigger(
+        [this](const NodeId& owner) {
+            if (sync_manager_) {
+                sync_manager_->request_sync_for_owner(owner);
+            }
+        });
 
     // Wire DomainService local mutations to SyncManager broadcast
     api_->domains().set_sync_broadcaster(
