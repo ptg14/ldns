@@ -1,5 +1,10 @@
 #include "core/cli/commands.hpp"
 
+#include "os/doctor.hpp"
+#include "os/firewall.hpp"
+#include "os/service.hpp"
+#include "os/system_dns_manager.hpp"
+
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -13,7 +18,6 @@ namespace {
 
 using json = nlohmann::json;
 
-constexpr std::uint32_t kMaxListPage = 100'000;
 
 void print_json(const json& document) {
     std::cout << document.dump(2) << '\n';
@@ -640,6 +644,187 @@ Result<DomainInfo> info(CoreApi& api, const InfoOptions& options, std::ostream& 
     }
 
     return info_res;
+}
+
+
+Result<void> doctor(CoreApi& api, const DoctorOptions& options, std::ostream& out) {
+    auto report = os::Doctor::run_diagnostics(api);
+
+    if (options.json) {
+        json j;
+        j["all_passed"] = report.all_passed;
+        j["passed_count"] = report.passed_count;
+        j["failed_count"] = report.failed_count;
+        json items = json::array();
+        for (const auto& item : report.items) {
+            json it;
+            it["name"] = item.name;
+            it["passed"] = item.passed;
+            it["detail"] = item.detail;
+            if (!item.fix_hint.empty()) it["fix_hint"] = item.fix_hint;
+            items.push_back(std::move(it));
+        }
+        j["checks"] = std::move(items);
+        out << j.dump(2) << '\n';
+        return {};
+    }
+
+    out << "Ldns System Diagnosis:\n";
+    for (const auto& item : report.items) {
+        out << "  [" << (item.passed ? "PASS" : "FAIL") << "] " << item.name << ": " << item.detail << '\n';
+        if (!item.passed && !item.fix_hint.empty()) {
+            out << "         Hint: " << item.fix_hint << '\n';
+        }
+    }
+    out << "Status: " << report.passed_count << "/" << report.items.size() << " check(s) passed.\n";
+    return {};
+}
+
+Result<void> system_cmd(CoreApi& api, const SystemOptions& options, std::ostream& out) {
+    os::SystemDnsManager mgr(api);
+
+    if (options.action == "setup") {
+        auto res = mgr.setup();
+        if (!res) return res;
+        if (options.json) {
+            out << "{\"status\":\"configured\",\"target\":\"127.0.0.1\"}\n";
+        } else {
+            out << "System DNS successfully set to 127.0.0.1 (backup preserved).\n";
+        }
+        return {};
+    }
+
+    if (options.action == "restore") {
+        auto res = mgr.restore();
+        if (!res) return res;
+        if (options.json) {
+            out << "{\"status\":\"restored\"}\n";
+        } else {
+            out << "System DNS successfully restored to original configuration.\n";
+        }
+        return {};
+    }
+
+    // Default: status
+    auto st = mgr.status();
+    if (options.json) {
+        json j;
+        j["is_managed_by_ldns"] = st.is_managed_by_ldns;
+        j["current_servers"] = st.current_servers;
+        j["backup_servers"] = st.backup_servers;
+        j["method_used"] = st.method_used;
+        out << j.dump(2) << '\n';
+        return {};
+    }
+
+    out << "OS DNS Configuration:\n";
+    out << "  Managed by Ldns: " << (st.is_managed_by_ldns ? "Yes" : "No") << '\n';
+    out << "  Method: " << st.method_used << '\n';
+    out << "  Active servers: ";
+    for (size_t i = 0; i < st.current_servers.size(); ++i) {
+        if (i > 0) out << ", ";
+        out << st.current_servers[i];
+    }
+    out << "\n  Backup servers: ";
+    for (size_t i = 0; i < st.backup_servers.size(); ++i) {
+        if (i > 0) out << ", ";
+        out << st.backup_servers[i];
+    }
+    out << '\n';
+    return {};
+}
+
+Result<void> service_cmd(const ServiceOptions& options, std::ostream& out) {
+    if (options.action == "install") {
+        auto res = os::ServiceManager::install(options.binary_path);
+        if (!res) return res;
+        if (options.json) out << "{\"status\":\"installed\"}\n";
+        else out << "Ldns service installed successfully.\n";
+        return {};
+    }
+
+    if (options.action == "uninstall") {
+        auto res = os::ServiceManager::uninstall();
+        if (!res) return res;
+        if (options.json) out << "{\"status\":\"uninstalled\"}\n";
+        else out << "Ldns service uninstalled successfully.\n";
+        return {};
+    }
+
+    if (options.action == "start") {
+        auto res = os::ServiceManager::start();
+        if (!res) return res;
+        if (options.json) out << "{\"status\":\"started\"}\n";
+        else out << "Ldns service started successfully.\n";
+        return {};
+    }
+
+    if (options.action == "stop") {
+        auto res = os::ServiceManager::stop();
+        if (!res) return res;
+        if (options.json) out << "{\"status\":\"stopped\"}\n";
+        else out << "Ldns service stopped successfully.\n";
+        return {};
+    }
+
+    // Default: status
+    auto info = os::ServiceManager::status();
+    if (options.json) {
+        json j;
+        j["is_installed"] = info.is_installed;
+        j["detail"] = info.detail;
+        std::string state_str = "unknown";
+        switch (info.state) {
+            case os::ServiceState::Running: state_str = "running"; break;
+            case os::ServiceState::Stopped: state_str = "stopped"; break;
+            case os::ServiceState::Starting: state_str = "starting"; break;
+            case os::ServiceState::Stopping: state_str = "stopping"; break;
+            case os::ServiceState::NotInstalled: state_str = "not_installed"; break;
+            default: break;
+        }
+        j["state"] = state_str;
+        out << j.dump(2) << '\n';
+        return {};
+    }
+
+    out << "Service status: " << info.detail << '\n';
+    return {};
+}
+
+Result<void> firewall_cmd(const FirewallOptions& options, std::ostream& out) {
+    if (options.action == "add") {
+        auto res = os::Firewall::add_rules();
+        if (!res) return res;
+        if (options.json) out << "{\"status\":\"rules_added\"}\n";
+        else out << "Firewall rules for Ldns (53, 5390, 5391) added successfully.\n";
+        return {};
+    }
+
+    if (options.action == "remove") {
+        auto res = os::Firewall::remove_rules();
+        if (!res) return res;
+        if (options.json) out << "{\"status\":\"rules_removed\"}\n";
+        else out << "Firewall rules for Ldns removed successfully.\n";
+        return {};
+    }
+
+    // Default: status
+    auto st = os::Firewall::status();
+    if (options.json) {
+        json j;
+        j["backend"] = st.backend_detected;
+        j["has_dns_rule"] = st.has_dns_rule;
+        j["has_discovery_rule"] = st.has_discovery_rule;
+        j["has_sync_rule"] = st.has_sync_rule;
+        out << j.dump(2) << '\n';
+        return {};
+    }
+
+    out << "Firewall status (Backend: " << st.backend_detected << "):\n";
+    out << "  Port 53 (DNS): " << (st.has_dns_rule ? "Allowed" : "Not configured") << '\n';
+    out << "  Port 5390 (Discovery): " << (st.has_discovery_rule ? "Allowed" : "Not configured") << '\n';
+    out << "  Port 5391 (Sync): " << (st.has_sync_rule ? "Allowed" : "Not configured") << '\n';
+    return {};
 }
 
 }  // namespace ldns::cli

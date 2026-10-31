@@ -27,6 +27,12 @@
 #include "core/runtime/runtime.hpp"
 #include "core/util/logger.hpp"
 #include "core/version.hpp"
+#include "ipc/ipc_server.hpp"
+#include "ipc/ipc_client.hpp"
+#include "os/doctor.hpp"
+#include "os/system_dns_manager.hpp"
+#include "os/service.hpp"
+#include "os/firewall.hpp"
 
 namespace {
 
@@ -119,12 +125,20 @@ int run_daemon(const GlobalOptions& global, bool foreground) {
     std::cout << '\n';
     std::cout.flush();
 
+    // Start IPC JSON-RPC 2.0 server (SPEC §10.1, §12, PLAN M8)
+    ipc::IpcServer ipc_server(runtime.value()->api());
+    ipc_server.set_shutdown_handler([&]() {
+        runtime.value()->request_stop();
+    });
+    (void)ipc_server.start();
+
     // SIGINT/SIGTERM (and the Windows console events) request a stop on the
     // io_context thread, so run() returns and the destructor closes the
     // sockets. See Runtime::install_signal_handlers.
     runtime.value()->install_signal_handlers();
 
     runtime.value()->run();
+    ipc_server.stop();
     logger()->info("shutdown complete");
     return cli::kExitOk;
 }
@@ -266,6 +280,42 @@ int run_command(const std::string& command, const GlobalOptions& global,
             return cli::kExitOk;
         }
     }
+    if (command == "doctor") {
+        cli::DoctorOptions opt;
+        opt.json = options.json;
+        auto result = cli::doctor(core, opt);
+        if (!result) return fail(result.error());
+        return cli::kExitOk;
+    }
+
+    if (command == "system") {
+        cli::SystemOptions opt;
+        opt.action = peer_subaction;
+        opt.json = options.json;
+        auto result = cli::system_cmd(core, opt);
+        if (!result) return fail(result.error());
+        return cli::kExitOk;
+    }
+
+    if (command == "service") {
+        cli::ServiceOptions opt;
+        opt.action = peer_subaction;
+        opt.binary_path = options.file;
+        opt.json = options.json;
+        auto result = cli::service_cmd(opt);
+        if (!result) return fail(result.error());
+        return cli::kExitOk;
+    }
+
+    if (command == "firewall") {
+        cli::FirewallOptions opt;
+        opt.action = peer_subaction;
+        opt.json = options.json;
+        auto result = cli::firewall_cmd(opt);
+        if (!result) return fail(result.error());
+        return cli::kExitOk;
+    }
+
     std::cerr << "error: unknown command\n";
     return cli::kExitUsage;
 }
@@ -364,9 +414,44 @@ int main(int argc, char** argv) {
     info_cmd->add_option("--type", options.type, "record type (default: A)")->default_val("A");
     info_cmd->add_flag("--json", options.json, "machine-readable output");
 
-    auto* daemon = app.add_subcommand("daemon", "run the DNS server headless");
+    auto* daemon = app.add_subcommand("daemon", "run the DNS server headless with IPC");
     daemon->add_flag("--foreground", options.foreground,
-                     "stay in the foreground (required until M8)");
+                     "stay in the foreground (or run as background service)");
+
+    auto* doctor_cmd = app.add_subcommand("doctor", "diagnose system environment (port 53, OS DNS, firewall, multicast)");
+    doctor_cmd->add_flag("--json", options.json, "machine-readable output");
+
+    auto* system_cmd = app.add_subcommand("system", "manage OS DNS configuration (setup, restore, status)");
+    system_cmd->require_subcommand(1, 1);
+    auto* sys_setup = system_cmd->add_subcommand("setup", "configure OS DNS to 127.0.0.1 (with automatic backup)");
+    sys_setup->add_flag("--json", options.json, "machine-readable output");
+    auto* sys_restore = system_cmd->add_subcommand("restore", "restore OS DNS to original backup configuration");
+    sys_restore->add_flag("--json", options.json, "machine-readable output");
+    auto* sys_status = system_cmd->add_subcommand("status", "show current OS DNS routing status");
+    sys_status->add_flag("--json", options.json, "machine-readable output");
+
+    auto* service_cmd = app.add_subcommand("service", "manage background OS service (install, uninstall, start, stop, status)");
+    service_cmd->require_subcommand(1, 1);
+    auto* svc_install = service_cmd->add_subcommand("install", "install Ldns as an OS background service");
+    svc_install->add_option("--bin", options.file, "path to binary");
+    svc_install->add_flag("--json", options.json, "machine-readable output");
+    auto* svc_uninstall = service_cmd->add_subcommand("uninstall", "uninstall Ldns OS service");
+    svc_uninstall->add_flag("--json", options.json, "machine-readable output");
+    auto* svc_start = service_cmd->add_subcommand("start", "start Ldns OS service");
+    svc_start->add_flag("--json", options.json, "machine-readable output");
+    auto* svc_stop = service_cmd->add_subcommand("stop", "stop Ldns OS service");
+    svc_stop->add_flag("--json", options.json, "machine-readable output");
+    auto* svc_status = service_cmd->add_subcommand("status", "check Ldns OS service status");
+    svc_status->add_flag("--json", options.json, "machine-readable output");
+
+    auto* firewall_cmd = app.add_subcommand("firewall", "manage LAN firewall rules for Ldns (53, 5390, 5391)");
+    firewall_cmd->require_subcommand(1, 1);
+    auto* fw_add = firewall_cmd->add_subcommand("add", "add firewall rules for local LAN ports");
+    fw_add->add_flag("--json", options.json, "machine-readable output");
+    auto* fw_rm = firewall_cmd->add_subcommand("remove", "remove Ldns firewall rules");
+    fw_rm->add_flag("--json", options.json, "machine-readable output");
+    auto* fw_status = firewall_cmd->add_subcommand("status", "show Ldns firewall rule status");
+    fw_status->add_flag("--json", options.json, "machine-readable output");
 
     try {
         app.parse(argc, argv);
@@ -398,6 +483,12 @@ int main(int argc, char** argv) {
     std::string peer_subaction;
     if (command == "peer" && !peer_cmd->get_subcommands().empty()) {
         peer_subaction = peer_cmd->get_subcommands().front()->get_name();
+    } else if (command == "system" && !system_cmd->get_subcommands().empty()) {
+        peer_subaction = system_cmd->get_subcommands().front()->get_name();
+    } else if (command == "service" && !service_cmd->get_subcommands().empty()) {
+        peer_subaction = service_cmd->get_subcommands().front()->get_name();
+    } else if (command == "firewall" && !firewall_cmd->get_subcommands().empty()) {
+        peer_subaction = firewall_cmd->get_subcommands().front()->get_name();
     }
 
     if (command == "daemon") return run_daemon(global, options.foreground);

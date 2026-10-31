@@ -16,6 +16,10 @@ if(MSVC)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
+if(WIN32)
+    add_compile_definitions(_WIN32_WINNT=0x0601 WIN32_LEAN_AND_MEAN)
+endif()
+
 option(LDNS_BUILD_TESTS "Build unit tests" ON)
 option(LDNS_SANITIZE "Enable AddressSanitizer/UBSan (GCC/Clang)" OFF)
 option(LDNS_WERROR "Treat compiler warnings as errors" ON)
@@ -97,6 +101,13 @@ add_library(ldns_core STATIC
     src/core/net/peer_manager.cpp
     src/core/registry/registry.cpp
     src/core/registry/sync_manager.cpp
+    src/ipc/json_rpc.cpp
+    src/ipc/ipc_server.cpp
+    src/ipc/ipc_client.cpp
+    src/os/doctor.cpp
+    src/os/system_dns_manager.cpp
+    src/os/firewall.cpp
+    src/os/service.cpp
 )
 target_include_directories(ldns_core PUBLIC src)
 target_link_libraries(ldns_core PUBLIC
@@ -108,8 +119,8 @@ target_link_libraries(ldns_core PUBLIC
     unofficial-sodium::sodium
 )
 if(WIN32)
-    # GetAdaptersAddresses (core/net/interfaces.cpp).
-    target_link_libraries(ldns_core PUBLIC iphlpapi ws2_32)
+    # GetAdaptersAddresses (core/net/interfaces.cpp), SCM / AdvAPI (os/service.cpp).
+    target_link_libraries(ldns_core PUBLIC iphlpapi ws2_32 advapi32)
 endif()
 target_compile_definitions(ldns_core PUBLIC LDNS_VERSION="${PROJECT_VERSION}")
 ldns_set_warnings(ldns_core)

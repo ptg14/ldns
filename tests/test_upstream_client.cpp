@@ -100,13 +100,13 @@ private:
             auto len_buf = std::make_shared<std::array<std::uint8_t, 2>>();
             asio::async_read(
                 *sock, asio::buffer(*len_buf),
-                [this, sock, len_buf](const asio::error_code& read_ec, std::size_t) {
+                [sock, len_buf](const asio::error_code& read_ec, std::size_t) {
                     if (read_ec) return;
                     std::size_t len = (static_cast<std::size_t>((*len_buf)[0]) << 8) | (*len_buf)[1];
                     auto buf = std::make_shared<std::vector<std::uint8_t>>(len);
                     asio::async_read(
                         *sock, asio::buffer(*buf),
-                        [this, sock, buf](const asio::error_code& body_ec, std::size_t) {
+                        [sock, buf](const asio::error_code& body_ec, std::size_t) {
                             if (body_ec) return;
                             auto parsed = Message::parse(*buf);
                             if (!parsed) return;

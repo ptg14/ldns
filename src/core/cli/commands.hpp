@@ -1,10 +1,8 @@
 #pragma once
 
-// One-shot CLI commands (SPEC §10.1, §10.3; PLAN M2).
+// One-shot CLI commands (SPEC §10.1, §10.3; PLAN M2, M6, M8).
 //
-// Every command is a thin wrapper over CoreApi: no command touches the Store,
-// the zone or the config directly. The TUI (M7) will register the same names
-// in its slash menu, so a command's behaviour is defined once, here.
+// Every command is a thin wrapper over CoreApi and OS services.
 //
 // Output contract:
 //   - human mode prints lines meant to be read by a person;
@@ -126,5 +124,35 @@ struct InfoOptions {
 };
 Result<DomainInfo> info(CoreApi& api, const InfoOptions& options,
                         std::ostream& out = std::cout);
+
+// --- Milestone 8 OS & Diagnostic commands ---
+
+struct DoctorOptions {
+    bool json{false};
+};
+Result<void> doctor(CoreApi& api, const DoctorOptions& options,
+                    std::ostream& out = std::cout);
+
+struct SystemOptions {
+    std::string action; // "setup" | "restore" | "status"
+    bool json{false};
+};
+Result<void> system_cmd(CoreApi& api, const SystemOptions& options,
+                        std::ostream& out = std::cout);
+
+struct ServiceOptions {
+    std::string action; // "install" | "uninstall" | "start" | "stop" | "status"
+    std::string binary_path;
+    bool json{false};
+};
+Result<void> service_cmd(const ServiceOptions& options,
+                         std::ostream& out = std::cout);
+
+struct FirewallOptions {
+    std::string action; // "add" | "remove" | "status"
+    bool json{false};
+};
+Result<void> firewall_cmd(const FirewallOptions& options,
+                          std::ostream& out = std::cout);
 
 }  // namespace ldns::cli

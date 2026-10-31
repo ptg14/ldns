@@ -576,3 +576,52 @@ Nếu user muốn giữ IP ảo (vd VPN), dùng `network.self_ip = "10.x.x.x"` �
   - Linux WSL GCC 13 Debug: 203/203 test cases PASS (100%).
   - Linux WSL Clang ASan + UBSan: 203/203 test cases PASS (100%), sạch hoàn toàn lỗi bộ nhớ và undefined behavior.
 - Tiếp theo: Sẵn sàng đề xuất commit Milestone 6 cho người dùng, sau đó sẵn sàng tiến tới Milestone 7 (TUI kiểu Claude Code) hoặc các hạng mục tiếp theo.
+
+## 2026-10-31 — Phiên làm việc: Hoàn thành Milestone 8 (Daemon, IPC JSON-RPC 2.0, OS Integration, Service, Doctor, Firewall)
+- Mục tiêu: Bỏ qua Milestone 7 (TUI trên nhánh `feat/ux-ui`), hoàn thành toàn diện Milestone 8 (M8) trên nhánh `main` theo `docs/PLAN.md` §M8, `docs/SPEC.md` §10.1, §12, §13:
+  - Máy chủ & máy khách IPC JSON-RPC 2.0 đa nền tảng (Windows Named Pipe `\\.\pipe\ldns` và Linux AF_UNIX domain socket).
+  - Chế độ Daemon ngầm `ldns daemon [--foreground]` và cơ chế CLI tự động phát hiện daemon qua IPC (fallback nhúng core).
+  - Tích hợp dịch vụ hệ điều hành OS Service: Windows SCM (cài/gỡ/chạy/dừng/trạng thái, cấu hình tự restart khi crash sau 2s/5s theo SPEC §13.3), Linux systemd unit (`ldns.service`, `CAP_NET_BIND_SERVICE`).
+  - Quản lý cấu hình DNS hệ điều hành (`ldns system setup|restore|status`): tự động sao lưu DNS gốc vào SQLite store trước khi trỏ về 127.0.0.1, hỗ trợ khôi phục an toàn.
+  - Bộ chẩn đoán hệ thống `ldns doctor [--json]`: kiểm tra bind 53, cổng multicast 5390, cổng sync 5391, tính toàn vẹn SQLite DB, và quyền hạn HĐH (Administrator/root/CAP_NET_BIND_SERVICE) kèm gợi ý khắc phục (`fix_hint`).
+  - Quản lý tường lửa `ldns firewall status|add|remove [--json]`: tự động phát hiện backend (Windows Advanced Firewall `netsh advfirewall`, Linux `ufw` / `firewalld`), cấu hình mở các cổng 53, 5390, 5391.
+- Đã thực hiện:
+  - Phase 8.1 (IPC JSON-RPC 2.0 Codec & Server/Client):
+    - `src/ipc/json_rpc.{hpp,cpp}`: Parse/serialize JSON-RPC 2.0 (Request, Response, RpcError), hỗ trợ notification, kiểm tra lỗi giao thức (-32700, -32600, -32601, -32602, -32603, và domain exit codes 1-5).
+    - `src/ipc/ipc_channel.hpp`: Cung cấp endpoint mặc định theo hệ điều hành (`\\.\pipe\ldns` trên Windows, `/tmp/ldns.sock` hoặc `$XDG_RUNTIME_DIR/ldns.sock` trên Linux).
+    - `src/ipc/ipc_server.{hpp,cpp}`: Máy chủ IPC lắng nghe bất đồng bộ, điều phối RPC tới `CoreApi` (`status`, `zone.add`, `zone.set`, `zone.rm`, `zone.ls`, `resolve`, `conflicts`, `peers.list`, `daemon.stop`).
+    - `src/ipc/ipc_client.{hpp,cpp}`: Máy khách IPC với `is_available()` và `call()` đồng bộ có timeout.
+  - Phase 8.2 (Daemon Mode & CLI auto-attach):
+    - Cập nhật `src/main.cpp`: subcommand `daemon` hỗ trợ cờ `--foreground` và lắng nghe IPC server.
+    - CLI commands (`zone add/set/rm/ls`, `status`, `resolve`, `conflicts`, `peers`): tự động kết nối IPC daemon nếu đang chạy; nếu daemon không chạy, tự động fallback nhúng `CoreApi` cục bộ.
+  - Phase 8.3 (Tích hợp Dịch vụ Hệ điều hành Service):
+    - `src/os/service.{hpp,cpp}`:
+      - Windows: Sử dụng Win32 Service Control Manager (`Advapi32`), cài đặt service với tham số `daemon --foreground`, đăng ký phục hồi tự động khi crash (`ChangeServiceConfig2A` với `SERVICE_CONFIG_FAILURE_ACTIONS`), truy vấn trạng thái bằng `QueryServiceStatusEx`.
+      - Linux: Tạo tệp service systemd `/etc/systemd/system/ldns.service`, cấp quyền `CAP_NET_BIND_SERVICE`, reload daemon và kích hoạt tự động.
+      - CLI: `ldns service install|uninstall|start|stop|status [--json]`.
+  - Phase 8.4 (Quản lý OS DNS & Sao lưu):
+    - `src/os/system_dns_manager.{hpp,cpp}`: Tự động phát hiện cấu hình DNS hiện tại thông qua `net::detect_system_dns()`, sao lưu bền vững vào `Store::meta("backup_dns_servers")`.
+    - `setup`: Cấu hình trỏ DNS hệ thống về `127.0.0.1` qua PowerShell `Set-DnsClientServerAddress` trên Windows hoặc `resolvectl` / `/etc/resolv.conf` trên Linux.
+    - `restore`: Khôi phục lại cấu hình DNS đã sao lưu trước đó.
+    - CLI: `ldns system setup|restore|status [--json]`.
+  - Phase 8.5 (Hệ thống chẩn đoán System Doctor):
+    - `src/os/doctor.{hpp,cpp}`: Kiểm tra khả năng bind cổng 53 UDP, cổng 5390 UDP multicast, cổng 5391 TCP sync, tính toàn vẹn SQLite DB, và quyền Administrator/root.
+    - CLI: `ldns doctor [--json]`.
+  - Phase 8.6 (Tường lửa Firewall):
+    - `src/os/firewall.{hpp,cpp}`: Nhận diện backend firewall (Windows `netsh advfirewall`, Linux `ufw` / `firewalld`), kiểm tra và tạo quy tắc mở cổng 53 UDP/TCP, 5390 UDP, 5391 TCP cho mạng LAN.
+    - CLI: `ldns firewall status|add|remove [--json]`.
+  - Kiểm thử & Tích hợp:
+    - Viết `tests/test_ipc.cpp`: Kiểm tra JSON-RPC 2.0 parser, serializer, và giao tiếp IPC server/client cục bộ end-to-end.
+    - Viết `tests/test_os.cpp`: Kiểm tra chẩn đoán Doctor, System DNS Manager, Firewall status, Service status.
+- Bug/lỗ hổng phát hiện và đã sửa trong phiên:
+    - Initializer list trap với `nlohmann::json id{nullptr}`: C++ initializer_list tạo ra mảng 1 phần tử `[null]` thay vì giá trị `null` -> sửa thành copy initialization `nlohmann::json id = nullptr;`.
+    - Win32 `QueryServiceStatusEx` & `advapi32`: Sửa tên hàm Win32 API chính xác và bổ sung liên kết `advapi32` trong CMake.
+    - Cảnh báo ép kiểu signed/unsigned trên Clang `-Wsign-conversion`: Thêm `static_cast<std::size_t>` và unsigned literal trong `message.cpp`, `config.cpp`, `ipc_server.cpp`.
+    - Unused lambda capture `this` trên Clang: Loại bỏ capture thừa trong `test_upstream_client.cpp`.
+    - Giữ sạch cảnh báo tuyệt đối với `/WX` trên MSVC và `-Werror` trên GCC/Clang.
+- Kết quả kiểm chứng:
+  - Windows MSVC Debug: 210/210 test cases, 2763 assertions PASS (100%).
+  - Linux WSL GCC 13 Debug: 210/210 test cases PASS (100%).
+  - Linux WSL Clang AddressSanitizer + UndefinedBehaviorSanitizer: 210/210 test cases PASS (100%), 0 warnings, không rò rỉ bộ nhớ hay lỗi sanitizers.
+  - Kiểm thử trực tiếp CLI: `ldns doctor`, `ldns firewall status --json`, `ldns service status --json`, `ldns system status --json` chạy mượt mà và chính xác trên cả Windows lẫn Linux WSL.
+- Tiếp theo: Báo cáo kết quả hoàn thành Milestone 8 và đề xuất commit message cho người dùng.

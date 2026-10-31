@@ -166,14 +166,14 @@ Mục tiêu: chứng minh vẽ được "vùng động" cố định ở đáy +
 
 ### M8 — Daemon, IPC, tích hợp HĐH (2 tuần)
 **Task**
-- [ ] IPC JSON-RPC 2.0: Unix socket (0600) / Named pipe (ACL); phương thức = `CoreApi`; luồng subscribe sự kiện.
-- [ ] `ldns daemon` (foreground/service); TUI/CLI tự phát hiện daemon và gắn vào; nếu không → nhúng core.
-- [ ] Linux: unit systemd, user `ldns`, capability; `/service install|…`.
-- [ ] Windows: dịch vụ SCM; cài/gỡ; khôi phục khi lỗi.
-- [ ] `/system setup|restore` cho systemd-resolved, NetworkManager, resolv.conf, Windows (sao lưu/khôi phục chắc chắn, kể cả khi crash).
-- [ ] `/doctor`: kiểm tra bind 53, `systemd-resolved`, quyền, firewall, multicast, đổi IP, upstream hoạt động.
-- [ ] Firewall: nhận diện và (khi được phép) thêm luật cho UDP/TCP 53, UDP 5390, TCP 5391 theo subnet LAN.
-- [ ] Hộp thoại xử lý lỗi bind/quyền với hướng dẫn cụ thể.
+- [x] IPC JSON-RPC 2.0: Unix socket (0600) / Named pipe (ACL); phương thức = `CoreApi`; luồng subscribe sự kiện.
+- [x] `ldns daemon` (foreground/service); TUI/CLI tự phát hiện daemon và gắn vào; nếu không → nhúng core.
+- [x] Linux: unit systemd, user `ldns`, capability; `/service install|…`.
+- [x] Windows: dịch vụ SCM; cài/gỡ; khôi phục khi lỗi.
+- [x] `/system setup|restore` cho systemd-resolved, NetworkManager, resolv.conf, Windows (sao lưu/khôi phục chắc chắn, kể cả khi crash).
+- [x] `/doctor`: kiểm tra bind 53, `systemd-resolved`, quyền, firewall, multicast, đổi IP, upstream hoạt động.
+- [x] Firewall: nhận diện và (khi được phép) thêm luật cho UDP/TCP 53, UDP 5390, TCP 5391 theo subnet LAN.
+- [x] Hộp thoại xử lý lỗi bind/quyền với hướng dẫn cụ thể.
 **Nghiệm thu:** cài service trên Ubuntu 22.04 và Windows 11 sạch; reboot → DNS tự chạy; `/system restore` trả DNS về như cũ; AC-4.4 (điện thoại dùng DNS là máy Ldns).
 
 ### M9 — Bảo mật & độ cứng (1,5 tuần)
