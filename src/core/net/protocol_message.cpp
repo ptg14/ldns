@@ -2,6 +2,8 @@
 
 #include <nlohmann/json.hpp>
 #include <algorithm>
+#include "core/dns/name.hpp"
+#include "core/dns/message.hpp"
 
 using json = nlohmann::json;
 
@@ -22,6 +24,68 @@ std::string_view error_code_name(ProtocolErrorCode code) {
     return "UNKNOWN";
 }
 
+
+json encode_op(const Op& op) {
+    json j;
+    j["op"] = op.op;
+    j["name"] = op.name;
+    j["type"] = op.type;
+    if (op.op == "put") {
+        j["ttl"] = op.ttl;
+        json data_arr = json::array();
+        for (const auto& d : op.data) {
+            if (op.type == 5) {
+                std::size_t offset = 0;
+                auto parsed_name = dns::Name::from_wire(d, offset);
+                if (parsed_name) {
+                    data_arr.push_back(parsed_name.value().to_string());
+                } else {
+                    data_arr.push_back(std::string(d.begin(), d.end()));
+                }
+            } else {
+                data_arr.push_back(json::binary(d));
+            }
+        }
+        j["data"] = std::move(data_arr);
+        j["created"] = op.created;
+    }
+    j["ts"] = op.ts;
+    return j;
+}
+
+Op decode_op(const json& j) {
+    Op op;
+    if (j.contains("op") && j["op"].is_string()) op.op = j["op"].get<std::string>();
+    if (j.contains("name") && j["name"].is_string()) op.name = j["name"].get<std::string>();
+    if (j.contains("type") && j["type"].is_number_unsigned()) op.type = j["type"].get<std::uint16_t>();
+    if (j.contains("ts") && j["ts"].is_number_unsigned()) op.ts = j["ts"].get<std::uint64_t>();
+    if (op.op == "put") {
+        if (j.contains("ttl") && j["ttl"].is_number_unsigned()) op.ttl = j["ttl"].get<std::uint32_t>();
+        if (j.contains("created") && j["created"].is_number_unsigned()) op.created = j["created"].get<std::uint64_t>();
+        if (j.contains("data") && j["data"].is_array()) {
+            for (const auto& item : j["data"]) {
+                if (item.is_binary()) {
+                    const auto& b = item.get_binary();
+                    op.data.emplace_back(b.begin(), b.end());
+                } else if (item.is_string()) {
+                    std::string s = item.get<std::string>();
+                    if (op.type == 5) {
+                        auto n = dns::Name::from_presentation(s);
+                        if (n) {
+                            auto w = n.value().wire();
+                            op.data.emplace_back(w.begin(), w.end());
+                        } else {
+                            op.data.emplace_back(s.begin(), s.end());
+                        }
+                    } else {
+                        op.data.emplace_back(s.begin(), s.end());
+                    }
+                }
+            }
+        }
+    }
+    return op;
+}
 Result<std::vector<std::uint8_t>> frame_payload(std::span<const std::uint8_t> payload) {
     if (payload.size() > kMaxFrameSize) {
         return Error{820, "frame payload exceeds 4 MiB maximum limit"};
@@ -134,6 +198,128 @@ Result<std::vector<std::uint8_t>> encode_error_frame(const ErrorMessage& msg) {
     return frame_payload(payload);
 }
 
+Result<std::vector<std::uint8_t>> encode_sync_req_frame(const SyncReqMessage& msg) {
+    json j;
+    j["t"] = "SYNC_REQ";
+    j["id"] = msg.id;
+    json owners_arr = json::array();
+    for (const auto& o : msg.owners) {
+        json item;
+        std::vector<std::uint8_t> node_bytes(o.owner.begin(), o.owner.end());
+        item["owner"] = json::binary(std::move(node_bytes));
+        item["epoch"] = o.epoch;
+        item["since_seq"] = o.since_seq;
+        owners_arr.push_back(std::move(item));
+    }
+    j["owners"] = std::move(owners_arr);
+
+    std::vector<std::uint8_t> payload;
+    json::to_msgpack(j, payload);
+    return frame_payload(payload);
+}
+
+Result<std::vector<std::uint8_t>> encode_sync_data_frame(const SyncDataMessage& msg) {
+    json j;
+    j["t"] = "SYNC_DATA";
+    j["id"] = msg.id;
+    std::vector<std::uint8_t> node_bytes(msg.owner.begin(), msg.owner.end());
+    j["owner"] = json::binary(std::move(node_bytes));
+    j["epoch"] = msg.epoch;
+    j["from_seq"] = msg.from_seq;
+    j["to_seq"] = msg.to_seq;
+    j["snapshot"] = msg.snapshot;
+    j["chunk"] = msg.chunk;
+    j["last"] = msg.last;
+
+    json ops_arr = json::array();
+    for (const auto& op : msg.ops) {
+        ops_arr.push_back(encode_op(op));
+    }
+    j["ops"] = std::move(ops_arr);
+
+    std::vector<std::uint8_t> payload;
+    json::to_msgpack(j, payload);
+    return frame_payload(payload);
+}
+
+Result<std::vector<std::uint8_t>> encode_sync_end_frame(const SyncEndMessage& msg) {
+    json j;
+    j["t"] = "SYNC_END";
+    j["id"] = msg.id;
+
+    std::vector<std::uint8_t> payload;
+    json::to_msgpack(j, payload);
+    return frame_payload(payload);
+}
+
+Result<std::vector<std::uint8_t>> encode_update_frame(const UpdateMessage& msg) {
+    json j;
+    j["t"] = "UPDATE";
+    std::vector<std::uint8_t> node_bytes(msg.owner.begin(), msg.owner.end());
+    j["owner"] = json::binary(std::move(node_bytes));
+    j["epoch"] = msg.epoch;
+    j["seq"] = msg.seq;
+
+    json ops_arr = json::array();
+    for (const auto& op : msg.ops) {
+        ops_arr.push_back(encode_op(op));
+    }
+    j["ops"] = std::move(ops_arr);
+
+    std::vector<std::uint8_t> payload;
+    json::to_msgpack(j, payload);
+    return frame_payload(payload);
+}
+
+Result<std::vector<std::uint8_t>> encode_resolve_frame(const ResolveMessage& msg) {
+    json j;
+    j["t"] = "RESOLVE";
+    j["id"] = msg.id;
+    j["name"] = msg.name;
+    j["type"] = msg.type;
+    std::vector<std::uint8_t> payload;
+    json::to_msgpack(j, payload);
+    return frame_payload(payload);
+}
+
+Result<std::vector<std::uint8_t>> encode_resolve_response_frame(const ResolveResponseMessage& msg) {
+    json j;
+    j["t"] = "RESOLVE_R";
+    j["id"] = msg.id;
+    j["rcode"] = msg.rcode;
+    j["epoch"] = msg.epoch;
+    j["seq"] = msg.seq;
+
+    json answers_arr = json::array();
+    for (const auto& a : msg.answers) {
+        json item;
+        item["name"] = a.name;
+        item["type"] = a.type;
+        item["ttl"] = a.ttl;
+        json data_arr = json::array();
+        for (const auto& d : a.data) {
+            if (a.type == 5) {
+                std::size_t offset = 0;
+                auto parsed_name = dns::Name::from_wire(d, offset);
+                if (parsed_name) {
+                    data_arr.push_back(parsed_name.value().to_string());
+                } else {
+                    data_arr.push_back(std::string(d.begin(), d.end()));
+                }
+            } else {
+                data_arr.push_back(json::binary(d));
+            }
+        }
+        item["data"] = std::move(data_arr);
+        answers_arr.push_back(std::move(item));
+    }
+    j["answers"] = std::move(answers_arr);
+
+    std::vector<std::uint8_t> payload;
+    json::to_msgpack(j, payload);
+    return frame_payload(payload);
+}
+
 Result<ParsedMessage> parse_payload(std::span<const std::uint8_t> payload) {
     auto j = json::from_msgpack(payload.begin(), payload.end(), true, false);
     if (j.is_discarded() || !j.is_object()) {
@@ -240,6 +426,124 @@ Result<ParsedMessage> parse_payload(std::span<const std::uint8_t> payload) {
             }
         }
         parsed.peers = std::move(pm);
+    } else if (parsed.type_name == "SYNC_REQ") {
+        parsed.type = MessageType::SyncReq;
+        SyncReqMessage sreq;
+        if (j.contains("id") && j["id"].is_number_unsigned()) sreq.id = j["id"].get<std::uint32_t>();
+        if (j.contains("owners") && j["owners"].is_array()) {
+            for (const auto& item : j["owners"]) {
+                if (item.is_object() && item.contains("owner") && item["owner"].is_binary() &&
+                    item["owner"].get_binary().size() == 16) {
+                    SyncReqOwner o;
+                    const auto& obin = item["owner"].get_binary();
+                    std::copy_n(obin.begin(), 16, o.owner.begin());
+                    if (item.contains("epoch") && item["epoch"].is_number_unsigned()) o.epoch = item["epoch"].get<std::uint64_t>();
+                    if (item.contains("since_seq") && item["since_seq"].is_number_unsigned()) o.since_seq = item["since_seq"].get<std::uint64_t>();
+                    sreq.owners.push_back(std::move(o));
+                }
+            }
+        }
+        parsed.sync_req = std::move(sreq);
+    } else if (parsed.type_name == "SYNC_DATA") {
+        parsed.type = MessageType::SyncData;
+        SyncDataMessage sdata;
+        if (j.contains("id") && j["id"].is_number_unsigned()) sdata.id = j["id"].get<std::uint32_t>();
+        if (j.contains("owner") && j["owner"].is_binary() && j["owner"].get_binary().size() == 16) {
+            const auto& obin = j["owner"].get_binary();
+            std::copy_n(obin.begin(), 16, sdata.owner.begin());
+        }
+        if (j.contains("epoch") && j["epoch"].is_number_unsigned()) sdata.epoch = j["epoch"].get<std::uint64_t>();
+        if (j.contains("from_seq") && j["from_seq"].is_number_unsigned()) sdata.from_seq = j["from_seq"].get<std::uint64_t>();
+        if (j.contains("to_seq") && j["to_seq"].is_number_unsigned()) sdata.to_seq = j["to_seq"].get<std::uint64_t>();
+        if (j.contains("snapshot") && j["snapshot"].is_boolean()) sdata.snapshot = j["snapshot"].get<bool>();
+        if (j.contains("chunk") && j["chunk"].is_number_unsigned()) sdata.chunk = j["chunk"].get<std::uint32_t>();
+        if (j.contains("last") && j["last"].is_boolean()) sdata.last = j["last"].get<bool>();
+        if (j.contains("ops") && j["ops"].is_array()) {
+            for (const auto& op_item : j["ops"]) {
+                if (op_item.is_object()) sdata.ops.push_back(decode_op(op_item));
+            }
+        }
+        parsed.sync_data = std::move(sdata);
+    } else if (parsed.type_name == "SYNC_END") {
+        parsed.type = MessageType::SyncEnd;
+        SyncEndMessage send;
+        if (j.contains("id") && j["id"].is_number_unsigned()) send.id = j["id"].get<std::uint32_t>();
+        parsed.sync_end = std::move(send);
+    } else if (parsed.type_name == "UPDATE") {
+        parsed.type = MessageType::Update;
+        UpdateMessage upd;
+        if (j.contains("owner") && j["owner"].is_binary() && j["owner"].get_binary().size() == 16) {
+            const auto& obin = j["owner"].get_binary();
+            std::copy_n(obin.begin(), 16, upd.owner.begin());
+        }
+        if (j.contains("epoch") && j["epoch"].is_number_unsigned()) upd.epoch = j["epoch"].get<std::uint64_t>();
+        if (j.contains("seq") && j["seq"].is_number_unsigned()) upd.seq = j["seq"].get<std::uint64_t>();
+        if (j.contains("ops") && j["ops"].is_array()) {
+            for (const auto& op_item : j["ops"]) {
+                if (op_item.is_object()) upd.ops.push_back(decode_op(op_item));
+            }
+        }
+        parsed.update = std::move(upd);
+    } else if (parsed.type_name == "RESOLVE") {
+        parsed.type = MessageType::Resolve;
+        ResolveMessage rmsg;
+        if (j.contains("id") && j["id"].is_number_unsigned()) rmsg.id = j["id"].get<std::uint32_t>();
+        if (j.contains("name") && j["name"].is_string()) rmsg.name = j["name"].get<std::string>();
+        if (j.contains("type")) {
+            if (j["type"].is_number_unsigned()) {
+                rmsg.type = j["type"].get<std::uint16_t>();
+            } else if (j["type"].is_string()) {
+                auto parsed_type = dns::rr_type_from_name(j["type"].get<std::string>());
+                if (parsed_type) rmsg.type = parsed_type.value();
+            }
+        }
+        parsed.resolve = std::move(rmsg);
+    } else if (parsed.type_name == "RESOLVE_R") {
+        parsed.type = MessageType::ResolveResponse;
+        ResolveResponseMessage rresp;
+        if (j.contains("id") && j["id"].is_number_unsigned()) rresp.id = j["id"].get<std::uint32_t>();
+        if (j.contains("rcode") && j["rcode"].is_number_unsigned()) rresp.rcode = j["rcode"].get<std::uint8_t>();
+        if (j.contains("epoch") && j["epoch"].is_number_unsigned()) rresp.epoch = j["epoch"].get<std::uint64_t>();
+        if (j.contains("seq") && j["seq"].is_number_unsigned()) rresp.seq = j["seq"].get<std::uint64_t>();
+        if (j.contains("answers") && j["answers"].is_array()) {
+            for (const auto& aitem : j["answers"]) {
+                if (!aitem.is_object()) continue;
+                ResolveAnswer ans;
+                if (aitem.contains("name") && aitem["name"].is_string()) ans.name = aitem["name"].get<std::string>();
+                if (aitem.contains("type")) {
+                    if (aitem["type"].is_number_unsigned()) {
+                        ans.type = aitem["type"].get<std::uint16_t>();
+                    } else if (aitem["type"].is_string()) {
+                        auto parsed_type = dns::rr_type_from_name(aitem["type"].get<std::string>());
+                        if (parsed_type) ans.type = parsed_type.value();
+                    }
+                }
+                if (aitem.contains("ttl") && aitem["ttl"].is_number_unsigned()) ans.ttl = aitem["ttl"].get<std::uint32_t>();
+                if (aitem.contains("data") && aitem["data"].is_array()) {
+                    for (const auto& dval : aitem["data"]) {
+                        if (dval.is_binary()) {
+                            const auto& b = dval.get_binary();
+                            ans.data.emplace_back(b.begin(), b.end());
+                        } else if (dval.is_string()) {
+                            std::string s = dval.get<std::string>();
+                            if (ans.type == 5) {
+                                auto n = dns::Name::from_presentation(s);
+                                if (n) {
+                                    auto w = n.value().wire();
+                                    ans.data.emplace_back(w.begin(), w.end());
+                                } else {
+                                    ans.data.emplace_back(s.begin(), s.end());
+                                }
+                            } else {
+                                ans.data.emplace_back(s.begin(), s.end());
+                            }
+                        }
+                    }
+                }
+                rresp.answers.push_back(std::move(ans));
+            }
+        }
+        parsed.resolve_response = std::move(rresp);
     } else {
         parsed.type = MessageType::Unknown;
     }

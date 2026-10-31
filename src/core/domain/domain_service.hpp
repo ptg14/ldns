@@ -30,6 +30,7 @@
 #include <vector>
 
 #include "core/dns/local_zone.hpp"
+#include "core/net/protocol_message.hpp"
 #include "core/dns/name.hpp"
 #include "core/store/store.hpp"
 #include "core/util/hlc.hpp"
@@ -133,6 +134,9 @@ public:
 
     void set_event_handler(EventHandler handler) { events_ = std::move(handler); }
 
+    using SyncBroadcaster = std::function<void(const std::vector<net::Op>&)>;
+    void set_sync_broadcaster(SyncBroadcaster broadcaster) { sync_broadcaster_ = std::move(broadcaster); }
+
     // [domains].warn_public_tld (SPEC §11). When false, public TLDs are
     // accepted without confirmation.
     void set_warn_public_tld(bool enabled) { warn_public_tld_ = enabled; }
@@ -150,6 +154,7 @@ private:
     DomainSink& zone_;
     HlcClock& clock_;
     EventHandler events_;
+    SyncBroadcaster sync_broadcaster_;
     bool warn_public_tld_{true};
 };
 

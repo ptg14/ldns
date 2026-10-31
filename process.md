@@ -474,3 +474,105 @@ Nếu user muốn giữ IP ảo (vd VPN), dùng `network.self_ip = "10.x.x.x"` �
   - Linux WSL Clang AddressSanitizer + UndefinedBehaviorSanitizer: 175/175 test cases PASS (100%), không phát hiện rò rỉ bộ nhớ hay lỗi bộ nhớ.
   - Kiểm thử trực tiếp CLI: Các lệnh `ldns peers`, `ldns peer add`, `ldns peer rm`, `ldns peer forget` đều chạy mượt mà ở cả chế độ bảng và chế độ JSON.
 - Tiếp theo: Sẵn sàng đề xuất commit Milestone 4 cho người dùng, sau đó tiến hành Milestone 5 (Đồng bộ Registry real-time theo docs/PLAN.md §M5).
+
+## 2026-10-26 19:30 — bước quan trọng (Hoàn thành toàn diện Milestone 5: Đồng bộ Registry real-time & OpLog)
+- Việc đã làm:
+  - Phase 5.1 (Wire Codec & Messages):
+    - Bổ sung cấu trúc `Op` (`put`/`del`), `SyncReqOwner`, `SyncReqMessage` (`t:"SYNC_REQ"`), `SyncDataMessage` (`t:"SYNC_DATA"`), `SyncEndMessage` (`t:"SYNC_END"`), `UpdateMessage` (`t:"UPDATE"`).
+    - Hỗ trợ mã hóa/giải mã MessagePack đầy đủ với cơ chế chuyển đổi CNAME presentation/wire per protocol §2.3.
+    - Viết unit test mở rộng trong `tests/test_protocol_message.cpp`.
+  - Phase 5.2 (Persistence & OpLog):
+    - Nâng cấp phiên bản schema SQLite lên version 2 (`migrations.hpp` / `migrations.cpp`).
+    - Bổ sung bảng `op_log` với index `idx_op_log_seq` (`seq`, `op`, `name`, `type`, `ttl`, `data_json`, `created_at`, `ts`).
+    - Cài đặt đầy đủ các phương thức `Store`: `log_op`, `ops_since`, `oldest_op_seq`, `purge_op_log_before`, `peer_records`, `all_peer_records`, `put_peer_record`, `delete_peer_record`, `replace_peer_records`, `delete_peer_records_for_owner`.
+    - Viết unit test trong `tests/test_store.cpp`.
+  - Phase 5.3 (In-Memory Registry & Snapshot):
+    - Bổ sung `std::hash<ldns::NodeId>` trong `src/core/util/id.hpp`.
+    - Xây dựng `src/core/registry/registry.hpp` và `registry.cpp`:
+      - `OwnerRecord`, `OwnerState`, `RecordClaim`, `RecordEvent`.
+      - `RegistrySnapshot`: Bản chụp bất biến (copy-on-write immutable snapshot) tối ưu cho đường dẫn đọc hiệu năng cao (hot path lookup lock-free); hỗ trợ tra cứu chính xác và leo nhãn tìm wildcard (`*.b.lan`, `*.lan`).
+      - `Registry`: `apply_ops` (kiểm tra epoch, lọc trùng seq, put/del), `reset_owner_snapshot`, `set_owner_online` (theo dõi epoch và seq), `remove_owner`, `purge_offline_owners`, `init_from_store`, thread-safe snapshot rebuild.
+    - Viết unit test trong `tests/test_registry.cpp`.
+  - Phase 5.4 (Sync Engine - SyncManager):
+    - Mở rộng `PeerManager`: bổ sung `broadcast_frame(frame, exclude_peer1, exclude_peer2)` và callback `set_sync_handler`.
+    - Xây dựng `src/core/registry/sync_manager.hpp` và `sync_manager.cpp`:
+      - `send_sync_req`: gửi danh sách các owner đã biết kèm `since_seq` tới peer vừa kết nối.
+      - `handle_sync_req`: tự động chọn gửi delta (nếu `op_log` cục bộ còn nguyên vẹn và <= 1000 compressed ops) hoặc snapshot (chunking <= 1000 ops), kết thúc bằng `SYNC_END`.
+      - `handle_sync_data`: áp dụng delta / snapshot, cập nhật bảng `peer_records` trong SQLite, vô hiệu hóa cache DNS, xử lý các update đang buffer.
+      - `handle_update`: lọc bản tin trùng lặp, phát hiện lỗ hổng tuần tự (`seq > last_seq + 1` -> đưa vào buffer và gửi `SYNC_REQ`), áp dụng các bản tin liên tiếp nguyên tử (`seq == last_seq + 1`), lưu vào store và **chuyển tiếp (gossip relay)** nguyên văn tới các peer lân cận (ngoại trừ node gửi và node sở hữu bản ghi).
+      - `broadcast_local_update`: phát `UpdateMessage` (hoặc proactive snapshot chunks nếu > 1000 ops) tới toàn bộ cluster khi domain cục bộ thay đổi.
+      - `purge_offline`: định kỳ loại bỏ các owner ngoại tuyến quá thời hạn lưu trữ khỏi registry và SQLite.
+  - Phase 5.5 (Tích hợp Runtime & Kiểm thử toàn diện):
+    - Tích hợp `DomainService`: liên kết `set_sync_broadcaster`, tự động ghi log vào `op_log` và tăng `seq` trong cùng transaction SQLite khi có mutation (`upsert`, `remove`, `add_many`, `refresh_self_records`).
+    - Tích hợp `CoreApi`: khởi tạo `Registry` từ SQLite khi khởi động (`init_from_store`).
+    - Tích hợp `Runtime`: khởi tạo `SyncManager`, kết nối với `PeerManager`, xóa `DnsCache` khi registry cập nhật.
+    - Viết bộ kiểm thử tích hợp `tests/test_sync.cpp`: kiểm tra phát hiện gap/buffering, broadcast cục bộ, đồng bộ 2 node và lan truyền gossip qua 3 node (A -> B -> C), dọn dẹp offline purge.
+- File liên quan:
+  - `CMakeLists.txt`, `tests/CMakeLists.txt`, `docs/PLAN.md`.
+  - `src/core/net/protocol_message.{hpp,cpp}`, `src/core/net/peer_manager.{hpp,cpp}`.
+  - `src/core/store/migrations.{hpp,cpp}`, `src/core/store/store.{hpp,cpp}`.
+  - `src/core/util/id.hpp`.
+  - `src/core/registry/registry.{hpp,cpp}`, `src/core/registry/sync_manager.{hpp,cpp}`.
+  - `src/core/domain/domain_service.{hpp,cpp}`, `src/core/core_api.{hpp,cpp}`, `src/core/runtime/runtime.{hpp,cpp}`.
+  - `tests/test_protocol_message.cpp`, `tests/test_store.cpp`, `tests/test_registry.cpp`, `tests/test_sync.cpp`.
+- Bug/lỗ hổng phát hiện và đã sửa trong phiên:
+  - SQLite signed 64-bit integer overflow: `UINT64_MAX` ép kiểu trực tiếp sang `sqlite3_int64` bị tràn thành `-1LL`, khiến câu lệnh `ops_since` trả về rỗng -> kẹp `since_seq` và `max_seq` bằng `std::min<std::uint64_t>(seq, INT64_MAX)`.
+  - Yêu cầu transaction đối với `Store::bump_seq()`: `bump_seq()` yêu cầu transaction SQLite đang mở (`store.begin()`), gọi ngoài transaction báo lỗi 408.
+  - Cảnh báo GCC `-Werror=missing-field-initializers`: khởi tạo aggregate `PeerManagerConfig` thiếu trường -> chuyển sang gán từng trường minh thị.
+  - Tính nhất quán epoch giữa các thành phần: `PeerManagerConfig.my_epoch`, `SyncManagerOptions.self_epoch` và `Store::identity().epoch` phải luôn đồng bộ từ DB; `set_owner_online` khởi tạo đúng epoch và seq được thông báo từ bản tin HELLO.
+- Kết quả kiểm chứng:
+  - Windows MSVC Debug: 190/190 test cases, 2458 assertions PASS (100%).
+  - Linux WSL GCC 13 Debug: 190/190 test cases PASS (100%).
+  - Linux WSL Clang ASan + UBSan: 190/190 test cases PASS (100%), không phát hiện rò rỉ hay lỗi bộ nhớ.
+- Tiếp theo: Sẵn sàng đề xuất commit Milestone 5 cho người dùng, sau đó bắt đầu Milestone 6 (PeerResolver: Voting + Ranking + Hedging theo docs/PLAN.md §M6).
+
+## 2026-10-26 — Phiên làm việc: Hoàn thành Milestone 6 (PeerResolver: Voting + Ranking + Hedging)
+- Mục tiêu: Hoàn thành trọn vẹn Milestone 6 (M6) theo `docs/PLAN.md` §M6, `docs/SPEC.md` §6.2d, §6.3, §6.4, §8, và `docs/protocol.md` §2.4, §6.6, §8:
+  - Wire codec cho bản tin mạng `RESOLVE` & `RESOLVE_R` qua `Session`.
+  - Bộ máy bỏ phiếu và xếp hạng thuần túy `PeerRanking` (`rank_peer_claims`) dựa trên nhóm RRset chuẩn hóa (SPEC §6.2.2c, protocol §8.4).
+  - Động cơ giải quyết phân tán `PeerResolver`: hedging (`hedge_ms`), tổng ngân sách phân giải (`budget_ms`), chế độ `serve_stale` cho owner ngoại tuyến, và theo dõi xung đột (`ConflictRecord`).
+  - Tích hợp pipeline DNS Bước 2 ($Local \rightarrow Peer \rightarrow Upstream$), bám đuôi chuỗi CNAME qua các peer (tối đa 8 hop) và nạp bộ nhớ đệm `DnsCache` với `min(ttl, 30s)`.
+  - Lệnh CLI `ldns conflicts [--json]` và `ldns info <domain> [--type <type>] [--json]`.
+  - Kiểm thử đa node đầu-cuối `tests/test_peer_e2e.cpp` chứng minh toàn bộ các kịch bản AC-1.2, AC-1.3, AC-1.4 và Hedging.
+- Đã thực hiện:
+  - Phase 6.1 (Wire Codec cho RESOLVE / RESOLVE_R):
+    - Mở rộng `src/core/net/protocol_message.{hpp,cpp}`: bổ sung `ResolveMessage` (`t:"RESOLVE"`), `ResolveResponseMessage` (`t:"RESOLVE_R"`), encoders `encode_resolve_frame()` và `encode_resolve_response_frame()`, cập nhật `parse_payload()`.
+    - Viết unit test trong `tests/test_protocol_message.cpp`.
+  - Phase 6.2 (Thuật toán xếp hạng & gom nhóm thuần túy `PeerRanking`):
+    - Triển khai `src/core/resolver/peer_ranking.{hpp,cpp}`:
+      - `canonicalize_rrset_data`: chuẩn hóa dữ liệu bản ghi theo thứ tự byte tăng dần và loại bỏ trùng lặp (bỏ qua TTL).
+      - `rank_peer_claims`: gom nhóm theo `(type, canonical_data)`, xếp hạng nhóm tất định: `vote_count` giảm dần $\rightarrow$ `oldest_claim_created` tăng dần $\rightarrow$ `lowest_node_id` tăng dần; sắp xếp ứng viên trong nhóm: `rtt_ms` tăng dần $\rightarrow$ `node_id` tăng dần; phát hiện xung đột và sai khác với zone cục bộ (`local_divergence`).
+    - Viết unit test trong `tests/test_peer_ranking.cpp`.
+  - Phase 6.3 (Mạng PeerManager cho RESOLVE & RESOLVE_R):
+    - Cập nhật `src/core/net/peer_manager.{hpp,cpp}`: hỗ trợ `send_to_peer(peer_id, frame)` và `set_resolve_handlers(req_handler, resp_handler)`, định tuyến bản tin RESOLVE/RESOLVE_R qua phiên TCP.
+  - Phase 6.4 (Động cơ PeerResolver & Tích hợp Pipeline Bước 2):
+    - Triển khai `src/core/resolver/peer_resolver.{hpp,cpp}`:
+      - Fast-path không qua mạng nếu registry không có claim cho domain.
+      - Chế độ `serve_stale` dự phòng cho các owner ngoại tuyến khi không có node online nào giữ claim.
+      - Duyệt các nhóm ứng viên theo thứ hạng, phát truy vấn kèm cơ chế hedging (`hedge_ms`) khi node đầu tiên trễ, bảo đảm tổng ngân sách `budget_ms`.
+      - Xử lý bản tin yêu cầu `handle_resolve_request`: chỉ truy vấn duy nhất `LocalZone` (chống vòng lặp phân giải phân tán theo SPEC §6.3.3 và §8.2).
+      - Quản lý và lưu trữ xung đột `conflicts()`, `get_conflict()`, `clear_conflicts()`.
+    - Tích hợp Bước 2 trong `src/core/resolver/pipeline.cpp`:
+      - Nạp kết quả từ peer vào `DnsCache` với TTL bị giới hạn ở 30s (`min(ttl, peer_ttl_cap)`).
+      - Hỗ trợ bám đuôi CNAME qua peer (tối đa 8 hop).
+    - Mở rộng `CoreApi` (`src/core/core_api.{hpp,cpp}`) và `Runtime` (`src/core/runtime/runtime.{hpp,cpp}`): kết nối `peer_resolver` với `peer_manager` và `sync_manager`.
+    - Viết unit test trong `tests/test_peer_resolver.cpp`.
+  - Phase 6.5 (CLI Commands: conflicts & info):
+    - Thêm phương thức `domain_info` vào `CoreApi` và tách hàm tiện ích chuẩn hóa hiển thị `dns::format_rdata` trong `src/core/dns/message.{hpp,cpp}`.
+    - Triển khai lệnh `ldns conflicts [--json]` và `ldns info <domain> [--type <type>] [--json]` trong `src/core/cli/commands.{hpp,cpp}` và `src/main.cpp`.
+    - Bổ sung unit test trong `tests/test_cli.cpp`.
+  - Phase 6.6 (Kiểm thử tích hợp đa node End-to-End):
+    - Triển khai `tests/test_peer_e2e.cpp` bao quát 4 kịch bản nghiệm thu lớn:
+      - Scenario 1 (AC-1.2): 2 node phân giải qua mạng peer, giới hạn TTL 30s và kiểm chứng cache hit ở lần truy vấn kế tiếp.
+      - Scenario 2 (AC-1.3): 3 node phân giải tên miền xung đột, kiểm chứng luật phân giải bẻ hòa (tie-breaking) tất định và ghi nhận `ConflictRecord`.
+      - Scenario 3 (AC-1.4): CNAME chain qua các peer độc lập (Node A giữ CNAME, Node B giữ A record, Node C phân giải trọn vẹn).
+      - Scenario 4: Hedging truy vấn khi peer đầu tiên bị trễ mạng (300ms > 60ms hedge timer), node thứ hai lập tức trả lời và hoàn tất dưới 280ms.
+- Bug/lỗ hổng phát hiện và đã sửa trong phiên:
+  - Windows SDK Macro Collision (`RrType::TXT`): Windows header `<wingdi.h>` định nghĩa macro `#define TXT ...`, gây xung đột trình biên dịch MSVC tại các mệnh đề switch-case -> chuyển `format_rdata` sang `src/core/dns/message.cpp` nơi không bị macro Windows gây ô nhiễm, loại bỏ hoàn toàn trùng lặp mã.
+  - Snapshot dereference: `CoreApi::domain_info` gọi `rank_peer_claims` cần truyền `*snapshot` (`const RegistrySnapshot&`) thay vì con trỏ `shared_ptr`.
+  - Kết nối sự kiện kết nối peer với SyncManager: `TestNode` ban đầu không truyền callback sự kiện vào `PeerManager`, khiến `sync->on_peer_event` không được kích hoạt khi phiên TCP được thiết lập -> kết nối `sync->on_peer_event` trong lambda callback của `PeerManager`.
+- Kết quả kiểm chứng:
+  - Windows MSVC Debug: 203/203 test cases, 2677 assertions PASS (100%).
+  - Linux WSL GCC 13 Debug: 203/203 test cases PASS (100%).
+  - Linux WSL Clang ASan + UBSan: 203/203 test cases PASS (100%), sạch hoàn toàn lỗi bộ nhớ và undefined behavior.
+- Tiếp theo: Sẵn sàng đề xuất commit Milestone 6 cho người dùng, sau đó sẵn sàng tiến tới Milestone 7 (TUI kiểu Claude Code) hoặc các hạng mục tiếp theo.

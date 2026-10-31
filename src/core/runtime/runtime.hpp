@@ -25,6 +25,7 @@
 #include "core/server/dns_server.hpp"
 #include "core/net/discovery.hpp"
 #include "core/net/peer_manager.hpp"
+#include "core/registry/sync_manager.hpp"
 #include "core/util/result.hpp"
 
 namespace ldns {
@@ -75,6 +76,8 @@ public:
     const std::vector<std::string>& bound_addresses() const;
     net::PeerManager* peer_manager() noexcept { return peer_manager_.get(); }
     net::DiscoveryService* discovery() noexcept { return discovery_.get(); }
+    SyncManager* sync_manager() noexcept { return sync_manager_.get(); }
+    resolver::PeerResolver* peer_resolver() noexcept { return &api_->peer_resolver(); }
 
 private:
     Runtime(RuntimeOptions options, std::unique_ptr<CoreApi> api);
@@ -102,6 +105,7 @@ private:
 
     std::shared_ptr<net::PeerManager> peer_manager_;
     std::shared_ptr<net::DiscoveryService> discovery_;
+    std::shared_ptr<SyncManager> sync_manager_;
     std::unique_ptr<asio::steady_timer> interface_monitor_timer_;
 };
 

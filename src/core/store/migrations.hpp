@@ -12,7 +12,7 @@ struct sqlite3;
 namespace ldns::store_detail {
 
 // Schema version written to PRAGMA user_version.
-inline constexpr int kSchemaVersion = 1;
+inline constexpr int kSchemaVersion = 2;
 
 // Brings `db` from `current_version` to kSchemaVersion. Runs inside a
 // transaction owned by the caller.

@@ -17,12 +17,14 @@
 #include "core/config/config.hpp"
 #include "core/config/paths.hpp"
 #include "core/dns/local_zone.hpp"
+#include "core/registry/registry.hpp"
 #include "core/domain/domain_service.hpp"
 #include "core/domain/import_export.hpp"
 #include "core/domain/local_zone_sink.hpp"
 #include "core/domain/self_address.hpp"
 #include "core/resolver/cache.hpp"
 #include "core/resolver/pipeline.hpp"
+#include "core/resolver/peer_resolver.hpp"
 #include "core/resolver/query_log.hpp"
 #include "core/resolver/upstream_client.hpp"
 #include "core/store/store.hpp"
@@ -46,6 +48,16 @@ struct NodeStatus {
     // validates it, at which point this becomes "protection active".
     bool psk_configured{false};
     bool psk_key_file_found{false};
+};
+
+struct DomainInfo {
+    dns::Name name;
+    std::uint16_t type{1};
+    bool has_local{false};
+    std::vector<std::string> local_records;
+    bool has_conflict{false};
+    bool local_divergence{false};
+    resolver::RankingResult ranking;
 };
 
 class CoreApi {
@@ -110,6 +122,8 @@ public:
     const dns::LocalZone& zone() const noexcept { return zone_; }
 
     Store& store() noexcept { return store_; }
+    Registry& registry() noexcept { return registry_; }
+    const Registry& registry() const noexcept { return registry_; }
     domain::DomainService& domains() noexcept { return service_; }
     HlcClock& clock() noexcept { return clock_; }
 
@@ -122,6 +136,15 @@ public:
 
     resolver::ResolverPipeline& pipeline() noexcept { return *pipeline_; }
     std::shared_ptr<resolver::ResolverPipeline> pipeline_shared() const noexcept { return pipeline_; }
+    resolver::PeerResolver& peer_resolver() noexcept { return *peer_resolver_; }
+    const resolver::PeerResolver& peer_resolver() const noexcept { return *peer_resolver_; }
+    std::shared_ptr<resolver::PeerResolver> peer_resolver_shared() const noexcept { return peer_resolver_; }
+
+    void set_peer_manager(std::shared_ptr<net::PeerManager> pm);
+    std::vector<resolver::ConflictRecord> conflicts() const;
+    std::optional<resolver::ConflictRecord> get_conflict(std::string_view name,
+                                                         std::string_view type = "A") const;
+    Result<DomainInfo> domain_info(std::string_view name, std::string_view type = "A") const;
     resolver::DnsCache& cache() noexcept { return *cache_; }
     resolver::UpstreamClient& upstream_client() noexcept { return *upstream_; }
     resolver::QueryLog& query_log() noexcept { return *query_log_; }
@@ -137,6 +160,7 @@ private:
     Options options_;
     Store store_;
     dns::LocalZone zone_;
+    Registry registry_;
     // Declared after zone_: the sink holds a reference to it.
     std::unique_ptr<domain::LocalZoneSink> sink_;
     // Declared before service_: DomainService stores a reference to the clock,
@@ -154,6 +178,7 @@ private:
     std::shared_ptr<resolver::UpstreamClient> upstream_;
     std::shared_ptr<resolver::QueryLog> query_log_;
     std::shared_ptr<resolver::ResolverPipeline> pipeline_;
+    std::shared_ptr<resolver::PeerResolver> peer_resolver_;
 };
 
 }  // namespace ldns

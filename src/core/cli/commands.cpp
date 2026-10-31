@@ -241,35 +241,7 @@ Result<void> export_zone(CoreApi& api, const ExportOptions& options) {
 }
 
 std::string format_rdata(std::uint16_t type, std::span<const std::uint8_t> rdata) {
-    switch (static_cast<dns::RrType>(type)) {
-        case dns::RrType::A:
-            if (rdata.size() == 4) return dns::format_ipv4(rdata);
-            break;
-        case dns::RrType::AAAA:
-            if (rdata.size() == 16) return dns::format_ipv6(rdata);
-            break;
-        case dns::RrType::CNAME:
-        case dns::RrType::NS:
-        case dns::RrType::PTR: {
-            auto name = dns::decode_rdata_name(rdata);
-            if (name) return name.value().to_string();
-            break;
-        }
-        case dns::RrType::TXT: {
-            auto txt = dns::decode_rdata_txt(rdata);
-            if (txt) return txt.value();
-            break;
-        }
-        default:
-            break;
-    }
-    std::string hex = "\\# " + std::to_string(rdata.size()) + " ";
-    for (std::uint8_t b : rdata) {
-        char buf[3];
-        std::snprintf(buf, sizeof(buf), "%02x", b);
-        hex += buf;
-    }
-    return hex;
+    return dns::format_rdata(type, rdata);
 }
 
 Result<resolver::PipelineResult> resolve(CoreApi& api, const ResolveOptions& options,
@@ -508,6 +480,166 @@ Result<void> peer_forget(CoreApi& api, const PeerForgetOptions& options, std::os
         out << "forgot peer " << to_hex(found.value()) << '\n';
     }
     return {};
+}
+
+Result<std::vector<resolver::ConflictRecord>> conflicts(CoreApi& api, const ConflictsOptions& options,
+                                                        std::ostream& out) {
+    auto records = api.conflicts();
+    if (options.json) {
+        json j = json::array();
+        for (const auto& cr : records) {
+            json item;
+            item["name"] = cr.name.to_string();
+            item["type"] = std::string(dns::rr_type_name(cr.type));
+            item["local_divergence"] = cr.local_divergence;
+            json groups = json::array();
+            for (const auto& g : cr.groups) {
+                json grp;
+                grp["type"] = std::string(dns::rr_type_name(g.type));
+                grp["ttl"] = g.ttl;
+                grp["vote_count"] = g.vote_count;
+                grp["oldest_claim_created"] = g.oldest_claim_created;
+                grp["lowest_node_id"] = to_hex(g.lowest_node_id);
+                json recs = json::array();
+                for (const auto& d : g.canonical_data) {
+                    recs.push_back(format_rdata(g.type, d));
+                }
+                grp["records"] = recs;
+                json cands = json::array();
+                for (const auto& c : g.candidates) {
+                    json cand;
+                    cand["node_id"] = to_hex(c.node_id);
+                    cand["online"] = c.online;
+                    cand["rtt_ms"] = c.rtt_ms;
+                    cand["claim_created_at"] = c.claim_created_at;
+                    cands.push_back(cand);
+                }
+                grp["candidates"] = cands;
+                groups.push_back(grp);
+            }
+            item["groups"] = groups;
+            j.push_back(item);
+        }
+        out << j.dump(2) << '\n';
+        return records;
+    }
+
+    if (records.empty()) {
+        out << "no active conflicts\n";
+        return records;
+    }
+
+    out << "Active conflicts (" << records.size() << "):\n";
+    for (const auto& cr : records) {
+        out << "  Domain: " << cr.name.to_string() << " (" << dns::rr_type_name(cr.type) << ")";
+        if (cr.local_divergence) {
+            out << " [Local divergence]";
+        } else {
+            out << " [" << cr.groups.size() << " competing groups]";
+        }
+        out << '\n';
+        for (std::size_t i = 0; i < cr.groups.size(); ++i) {
+            const auto& g = cr.groups[i];
+            out << "    Group " << (i + 1) << " (" << g.vote_count << " vote" << (g.vote_count > 1 ? "s" : "")
+                << ", oldest: " << g.oldest_claim_created << ", lowest node: " << short_id(g.lowest_node_id) << "):\n";
+            for (const auto& d : g.canonical_data) {
+                out << "      - " << format_rdata(g.type, d) << " (TTL " << g.ttl << ")\n";
+            }
+            out << "      Candidates:\n";
+            for (const auto& c : g.candidates) {
+                out << "        * " << short_id(c.node_id) << " (" << (c.online ? "online" : "offline")
+                    << ", RTT " << c.rtt_ms << "ms)\n";
+            }
+        }
+    }
+
+    return records;
+}
+
+Result<DomainInfo> info(CoreApi& api, const InfoOptions& options, std::ostream& out) {
+    auto info_res = api.domain_info(options.name, options.type);
+    if (!info_res) return info_res.error();
+
+    const auto& di = info_res.value();
+    if (options.json) {
+        json j;
+        j["name"] = di.name.to_string();
+        j["type"] = std::string(dns::rr_type_name(di.type));
+        j["has_local"] = di.has_local;
+        j["local_records"] = di.local_records;
+        j["has_conflict"] = di.has_conflict;
+        j["local_divergence"] = di.local_divergence;
+        json groups = json::array();
+        for (std::size_t i = 0; i < di.ranking.groups.size(); ++i) {
+            const auto& g = di.ranking.groups[i];
+            json grp;
+            grp["rank"] = i + 1;
+            grp["type"] = std::string(dns::rr_type_name(g.type));
+            grp["ttl"] = g.ttl;
+            grp["vote_count"] = g.vote_count;
+            grp["oldest_claim_created"] = g.oldest_claim_created;
+            grp["lowest_node_id"] = to_hex(g.lowest_node_id);
+            json recs = json::array();
+            for (const auto& d : g.canonical_data) {
+                recs.push_back(format_rdata(g.type, d));
+            }
+            grp["records"] = recs;
+            json cands = json::array();
+            for (const auto& c : g.candidates) {
+                json cand;
+                cand["node_id"] = to_hex(c.node_id);
+                cand["online"] = c.online;
+                cand["rtt_ms"] = c.rtt_ms;
+                cand["claim_created_at"] = c.claim_created_at;
+                cands.push_back(cand);
+            }
+            grp["candidates"] = cands;
+            groups.push_back(grp);
+        }
+        j["groups"] = groups;
+        out << j.dump(2) << '\n';
+        return info_res;
+    }
+
+    out << "Domain: " << di.name.to_string() << " (" << dns::rr_type_name(di.type) << ")\n";
+    out << "Local Zone:\n";
+    if (di.has_local && !di.local_records.empty()) {
+        for (const auto& rec : di.local_records) {
+            out << "  - " << rec << '\n';
+        }
+    } else {
+        out << "  (none)\n";
+    }
+
+    out << "Peer Claims:\n";
+    if (di.ranking.groups.empty()) {
+        out << "  (none)\n";
+    } else {
+        for (std::size_t i = 0; i < di.ranking.groups.size(); ++i) {
+            const auto& g = di.ranking.groups[i];
+            out << "  Group " << (i + 1) << " (" << g.vote_count << " vote" << (g.vote_count > 1 ? "s" : "")
+                << ", oldest: " << g.oldest_claim_created << ", lowest node: " << short_id(g.lowest_node_id) << "):\n";
+            for (const auto& d : g.canonical_data) {
+                out << "    - " << format_rdata(g.type, d) << " (TTL " << g.ttl << ")\n";
+            }
+            out << "    Candidates:\n";
+            for (const auto& c : g.candidates) {
+                out << "      * " << short_id(c.node_id) << " (" << (c.online ? "online" : "offline")
+                    << ", RTT " << c.rtt_ms << "ms, created: " << c.claim_created_at << ")\n";
+            }
+        }
+    }
+
+    out << "Conflict: ";
+    if (di.local_divergence) {
+        out << "Local divergence (local record differs from peer claims)\n";
+    } else if (di.has_conflict) {
+        out << "Multiple competing peer groups (" << di.ranking.groups.size() << ")\n";
+    } else {
+        out << "None\n";
+    }
+
+    return info_res;
 }
 
 }  // namespace ldns::cli

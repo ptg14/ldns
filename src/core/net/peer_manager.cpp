@@ -344,7 +344,55 @@ void PeerManager::on_session_closed(std::shared_ptr<Session> session, std::strin
     }
 }
 
-void PeerManager::on_session_message(std::shared_ptr<Session> /*session*/, const ParsedMessage& msg) {
+void PeerManager::set_sync_handler(SyncMessageHandler handler) {
+    std::lock_guard lock(mutex_);
+    sync_handler_ = std::move(handler);
+}
+
+void PeerManager::set_resolve_handlers(ResolveRequestHandler req_handler, ResolveResponseHandler resp_handler) {
+    std::lock_guard lock(mutex_);
+    resolve_req_handler_ = std::move(req_handler);
+    resolve_resp_handler_ = std::move(resp_handler);
+}
+
+bool PeerManager::send_to_peer(const NodeId& peer_id, std::vector<std::uint8_t> frame) {
+    std::shared_ptr<Session> target_session;
+    {
+        std::lock_guard lock(mutex_);
+        const std::string key = to_hex(peer_id);
+        const auto it = peers_.find(key);
+        if (it != peers_.end() && it->second.is_online && it->second.session &&
+            it->second.session->state() == SessionState::Established) {
+            target_session = it->second.session;
+        }
+    }
+    if (target_session) {
+        target_session->send_frame(std::move(frame));
+        return true;
+    }
+    return false;
+}
+
+void PeerManager::broadcast_frame(std::vector<std::uint8_t> frame, const NodeId* exclude_peer1,
+                                  const NodeId* exclude_peer2) {
+    std::vector<std::shared_ptr<Session>> targets;
+    {
+        std::lock_guard lock(mutex_);
+        for (const auto& [_, session] : active_sessions_) {
+            if (session && session->state() == SessionState::Established) {
+                const auto& pid = session->peer_node_id();
+                if (exclude_peer1 && pid == *exclude_peer1) continue;
+                if (exclude_peer2 && pid == *exclude_peer2) continue;
+                targets.push_back(session);
+            }
+        }
+    }
+    for (const auto& s : targets) {
+        s->send_frame(frame);
+    }
+}
+
+void PeerManager::on_session_message(std::shared_ptr<Session> session, const ParsedMessage& msg) {
     if (msg.type == MessageType::Peers && msg.peers) {
         // Peer exchange: learn about new peers
         for (const auto& item : msg.peers->peers) {
@@ -362,6 +410,37 @@ void PeerManager::on_session_message(std::shared_ptr<Session> /*session*/, const
                 }
             }
         }
+    }
+
+    if (msg.type == MessageType::Resolve && msg.resolve) {
+        ResolveRequestHandler rhandler;
+        {
+            std::lock_guard lock(mutex_);
+            rhandler = resolve_req_handler_;
+        }
+        if (rhandler) {
+            rhandler(session, *msg.resolve);
+            return;
+        }
+    } else if (msg.type == MessageType::ResolveResponse && msg.resolve_response) {
+        ResolveResponseHandler rhandler;
+        {
+            std::lock_guard lock(mutex_);
+            rhandler = resolve_resp_handler_;
+        }
+        if (rhandler) {
+            rhandler(session, *msg.resolve_response);
+            return;
+        }
+    }
+
+    SyncMessageHandler handler;
+    {
+        std::lock_guard lock(mutex_);
+        handler = sync_handler_;
+    }
+    if (handler) {
+        handler(session, msg);
     }
 }
 

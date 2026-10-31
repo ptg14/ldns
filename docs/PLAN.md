@@ -125,29 +125,29 @@ Mục tiêu: chứng minh vẽ được "vùng động" cố định ở đáy +
 
 ### M5 — Đồng bộ Registry real-time (2 tuần)
 **Task**
-- [ ] `Registry`: `OwnerState`, áp dụng op, cấu trúc đọc không khóa (snapshot bất biến/RCU) cho hot-path DNS.
-- [ ] Bảng `peers`, `peer_records` (lưu bền registry để khởi động nhanh).
-- [ ] Op log của owner (put/del), tăng `seq` trong cùng transaction với thay đổi `my_records`.
-- [ ] `SYNC_REQ` / `SYNC_DATA` (delta + snapshot chia khúc), `UPDATE` đẩy tức thì.
-- [ ] Phát hiện lỗ hổng seq, xử lý `epoch`.
-- [ ] Relay gossip + dedupe `(owner,epoch,seq)`.
-- [ ] Cập nhật `self` khi đổi IP → phát UPDATE + beacon.
-- [ ] Giữ owner offline theo `offline_retention`; dọn dẹp.
-- [ ] Sự kiện `RecordPut/Del{owner}` → TUI/CLI `--follow`; invalid hóa cache.
-- [ ] Test mô phỏng: N node, mất gói, chia mạng, khởi động lại ngẫu nhiên → **hội tụ**.
+- [x] `Registry`: `OwnerState`, áp dụng op, cấu trúc đọc không khóa (snapshot bất biến/RCU) cho hot-path DNS.
+- [x] Bảng `peers`, `peer_records` (lưu bền registry để khởi động nhanh).
+- [x] Op log của owner (put/del), tăng `seq` trong cùng transaction với thay đổi `my_records`.
+- [x] `SYNC_REQ` / `SYNC_DATA` (delta + snapshot chia khúc), `UPDATE` đẩy tức thì.
+- [x] Phát hiện lỗ hổng seq, xử lý `epoch`.
+- [x] Relay gossip + dedupe `(owner,epoch,seq)`.
+- [x] Cập nhật `self` khi đổi IP → phát UPDATE + beacon.
+- [x] Giữ owner offline theo `offline_retention`; dọn dẹp.
+- [x] Sự kiện `RecordPut/Del{owner}` → TUI/CLI `--follow`; invalid hóa cache.
+- [x] Test mô phỏng: N node, mất gói, chia mạng, khởi động lại ngẫu nhiên → **hội tụ**.
 **Nghiệm thu:** AC-2.2, 2.3, 2.5, 2.7; node mới đồng bộ 10 000 record < 2 s; benchmark độ trễ lan truyền < 500 ms.
 
 ### M6 — PeerResolver: bỏ phiếu + xếp hạng + hedging (1,5 tuần)
 **Task**
-- [ ] Tính claim của từng owner cho `(qname,qtype)` (chính xác trước, wildcard sau).
-- [ ] Gom nhóm bản theo RRset chuẩn hóa (sắp xếp, so sánh TTL-bỏ-qua); chỉ tính owner online.
-- [ ] Xếp hạng: phiếu ↓ → claim cũ nhất → node_id nhỏ nhất (D10) — **hàm thuần, test kỹ**.
-- [ ] `RESOLVE`/`RESOLVE_R` qua `Session`; peer chỉ trả từ LocalZone (chống vòng lặp).
-- [ ] Duyệt: trong nhóm theo RTT; hedging `hedge_ms`; tổng ngân sách `budget_ms`; hủy phần còn lại khi có kết quả.
-- [ ] Bước 2e `serve_stale` cho owner offline.
-- [ ] Ghi nhận xung đột (`Conflict`) + lệnh `/conflicts`, `/info` (nhóm, phiếu, thứ hạng).
-- [ ] Tích hợp vào pipeline; `--trace` hiển thị peer đã thử và kết quả.
-- [ ] Test kịch bản SPEC §6.4 và AC-1.2…1.7 (tự động, nhiều tiến trình).
+- [x] Tính claim của từng owner cho `(qname,qtype)` (chính xác trước, wildcard sau).
+- [x] Gom nhóm bản theo RRset chuẩn hóa (sắp xếp, so sánh TTL-bỏ-qua); chỉ tính owner online.
+- [x] Xếp hạng: phiếu ↓ → claim cũ nhất → node_id nhỏ nhất (D10) — **hàm thuần, test kỹ**.
+- [x] `RESOLVE`/`RESOLVE_R` qua `Session`; peer chỉ trả từ LocalZone (chống vòng lặp).
+- [x] Duyệt: trong nhóm theo RTT; hedging `hedge_ms`; tổng ngân sách `budget_ms`; hủy phần còn lại khi có kết quả.
+- [x] Bước 2e `serve_stale` cho owner offline.
+- [x] Ghi nhận xung đột (`Conflict`) + lệnh `/conflicts`, `/info` (nhóm, phiếu, thứ hạng).
+- [x] Tích hợp vào pipeline; `--trace` hiển thị peer đã thử và kết quả.
+- [x] Test kịch bản SPEC §6.4 và AC-1.2…1.7 (tự động, nhiều tiến trình).
 **Nghiệm thu:** toàn bộ AC-1.x đạt. **Đây là mốc "bản chạy đúng mục đích R1+R2".** Demo 3 máy thật.
 
 ### M7 — TUI kiểu Claude Code (3 tuần, bắt đầu sau S1, tích hợp lệnh thật sau M2)

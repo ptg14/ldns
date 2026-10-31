@@ -60,11 +60,88 @@ struct ErrorMessage {
     std::string msg;
 };
 
+struct Op {
+    std::string op; // "put" | "del"
+    std::string name;
+    std::uint16_t type{1};
+    std::uint32_t ttl{60};
+    std::vector<std::vector<std::uint8_t>> data;
+    std::uint64_t created{0};
+    std::uint64_t ts{0};
+
+    bool operator==(const Op& other) const = default;
+};
+
+struct SyncReqOwner {
+    NodeId owner{};
+    std::uint64_t epoch{0};
+    std::uint64_t since_seq{0};
+
+    bool operator==(const SyncReqOwner& other) const = default;
+};
+
+struct SyncReqMessage {
+    std::uint32_t id{0};
+    std::vector<SyncReqOwner> owners;
+};
+
+struct SyncDataMessage {
+    std::uint32_t id{0};
+    NodeId owner{};
+    std::uint64_t epoch{0};
+    std::uint64_t from_seq{0};
+    std::uint64_t to_seq{0};
+    bool snapshot{false};
+    std::uint32_t chunk{0};
+    bool last{true};
+    std::vector<Op> ops;
+};
+
+struct SyncEndMessage {
+    std::uint32_t id{0};
+};
+
+struct UpdateMessage {
+    NodeId owner{};
+    std::uint64_t epoch{0};
+    std::uint64_t seq{0};
+    std::vector<Op> ops;
+};
+
+struct ResolveAnswer {
+    std::string name;
+    std::uint16_t type{1};
+    std::uint32_t ttl{60};
+    std::vector<std::vector<std::uint8_t>> data;
+
+    bool operator==(const ResolveAnswer& other) const = default;
+};
+
+struct ResolveMessage {
+    std::uint32_t id{0};
+    std::string name;
+    std::uint16_t type{1};
+};
+
+struct ResolveResponseMessage {
+    std::uint32_t id{0};
+    std::uint8_t rcode{0}; // 0: NOERROR, 2: SERVFAIL, 3: NXDOMAIN, 5: REFUSED
+    std::uint64_t epoch{0};
+    std::uint64_t seq{0};
+    std::vector<ResolveAnswer> answers;
+};
+
 enum class MessageType {
     Hello,
     Ping,
     Pong,
     Peers,
+    SyncReq,
+    SyncData,
+    SyncEnd,
+    Update,
+    Resolve,
+    ResolveResponse,
     Bye,
     Error,
     Unknown,
@@ -76,6 +153,12 @@ struct ParsedMessage {
     std::optional<HelloMessage> hello;
     std::optional<PeersMessage> peers;
     std::optional<ErrorMessage> error;
+    std::optional<SyncReqMessage> sync_req;
+    std::optional<SyncDataMessage> sync_data;
+    std::optional<SyncEndMessage> sync_end;
+    std::optional<UpdateMessage> update;
+    std::optional<ResolveMessage> resolve;
+    std::optional<ResolveResponseMessage> resolve_response;
 };
 
 // Frames payload with 4-byte big-endian length prefix (protocol §4.1)
@@ -88,6 +171,12 @@ Result<std::vector<std::uint8_t>> encode_pong_frame();
 Result<std::vector<std::uint8_t>> encode_bye_frame();
 Result<std::vector<std::uint8_t>> encode_peers_frame(const PeersMessage& msg);
 Result<std::vector<std::uint8_t>> encode_error_frame(const ErrorMessage& msg);
+Result<std::vector<std::uint8_t>> encode_sync_req_frame(const SyncReqMessage& msg);
+Result<std::vector<std::uint8_t>> encode_sync_data_frame(const SyncDataMessage& msg);
+Result<std::vector<std::uint8_t>> encode_sync_end_frame(const SyncEndMessage& msg);
+Result<std::vector<std::uint8_t>> encode_update_frame(const UpdateMessage& msg);
+Result<std::vector<std::uint8_t>> encode_resolve_frame(const ResolveMessage& msg);
+Result<std::vector<std::uint8_t>> encode_resolve_response_frame(const ResolveResponseMessage& msg);
 
 // Message parser from raw unencrypted payload
 Result<ParsedMessage> parse_payload(std::span<const std::uint8_t> payload);

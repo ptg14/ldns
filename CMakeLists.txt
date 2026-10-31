@@ -87,12 +87,16 @@ add_library(ldns_core STATIC
     src/core/resolver/upstream_client.cpp
     src/core/resolver/query_log.cpp
     src/core/resolver/pipeline.cpp
+    src/core/resolver/peer_ranking.cpp
+    src/core/resolver/peer_resolver.cpp
     src/core/net/crypto.cpp
     src/core/net/beacon.cpp
     src/core/net/discovery.cpp
     src/core/net/protocol_message.cpp
     src/core/net/session.cpp
     src/core/net/peer_manager.cpp
+    src/core/registry/registry.cpp
+    src/core/registry/sync_manager.cpp
 )
 target_include_directories(ldns_core PUBLIC src)
 target_link_libraries(ldns_core PUBLIC

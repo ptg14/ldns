@@ -30,3 +30,19 @@ bool is_zero(const NodeId& id) noexcept;
 std::string short_id(const NodeId& id);
 
 }  // namespace ldns
+
+namespace std {
+
+template <>
+struct hash<ldns::NodeId> {
+    std::size_t operator()(const ldns::NodeId& id) const noexcept {
+        std::uint64_t h = 0xcbf29ce484222325ULL;
+        for (const auto b : id) {
+            h ^= static_cast<std::uint64_t>(b);
+            h *= 0x100000001b3ULL;
+        }
+        return static_cast<std::size_t>(h);
+    }
+};
+
+}  // namespace std

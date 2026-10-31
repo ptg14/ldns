@@ -145,6 +145,7 @@ Result<std::vector<std::uint8_t>> parse_ipv4(std::string_view text);
 std::string format_ipv4(std::span<const std::uint8_t> bytes);
 Result<std::vector<std::uint8_t>> parse_ipv6(std::string_view text);
 std::string format_ipv6(std::span<const std::uint8_t> bytes);
+std::string format_rdata(std::uint16_t type, std::span<const std::uint8_t> rdata);
 
 std::string_view rr_type_name(std::uint16_t type);
 Result<std::uint16_t> rr_type_from_name(std::string_view name);

@@ -484,6 +484,193 @@ Result<void> Store::remove_manual_peer(std::string_view endpoint) {
     return {};
 }
 
+Result<void> Store::log_op(const OpLogRow& row) {
+    std::lock_guard lock(mutex_);
+    Statement stmt(db_,
+                   "INSERT INTO op_log(seq, op, name, type, ttl, data_json, created_at, ts) "
+                   "VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) "
+                   "ON CONFLICT(seq, name, type) DO UPDATE SET "
+                   "op = excluded.op, ttl = excluded.ttl, data_json = excluded.data_json, "
+                   "created_at = excluded.created_at, ts = excluded.ts;");
+    if (!stmt) return db_error(421, "log op");
+
+    auto encoded = encode_data(row.data);
+    if (!encoded) return encoded.error();
+
+    sqlite3_bind_int64(stmt.get(), 1, static_cast<sqlite3_int64>(row.seq));
+    bind_text(stmt.get(), 2, row.op);
+    bind_text(stmt.get(), 3, row.name);
+    sqlite3_bind_int(stmt.get(), 4, row.type);
+    sqlite3_bind_int64(stmt.get(), 5, row.ttl);
+    bind_text(stmt.get(), 6, encoded.value());
+    sqlite3_bind_int64(stmt.get(), 7, static_cast<sqlite3_int64>(row.created_at));
+    sqlite3_bind_int64(stmt.get(), 8, static_cast<sqlite3_int64>(row.ts));
+
+    if (sqlite3_step(stmt.get()) != SQLITE_DONE) return db_error(421, "log op");
+    return {};
+}
+
+Result<std::vector<OpLogRow>> Store::ops_since(std::uint64_t since_seq, std::uint64_t max_seq) {
+    std::lock_guard lock(mutex_);
+    Statement stmt(db_,
+                   "SELECT seq, op, name, type, ttl, data_json, created_at, ts "
+                   "FROM op_log WHERE seq > ?1 AND seq <= ?2 ORDER BY seq;");
+    if (!stmt) return db_error(422, "query ops");
+
+    const auto bound_since = std::min<std::uint64_t>(since_seq, static_cast<std::uint64_t>(INT64_MAX));
+    const auto bound_max = std::min<std::uint64_t>(max_seq, static_cast<std::uint64_t>(INT64_MAX));
+    sqlite3_bind_int64(stmt.get(), 1, static_cast<sqlite3_int64>(bound_since));
+    sqlite3_bind_int64(stmt.get(), 2, static_cast<sqlite3_int64>(bound_max));
+
+    std::vector<OpLogRow> out;
+    while (true) {
+        const int rc = sqlite3_step(stmt.get());
+        if (rc == SQLITE_DONE) break;
+        if (rc != SQLITE_ROW) return db_error(422, "query ops");
+
+        OpLogRow row;
+        row.seq = static_cast<std::uint64_t>(sqlite3_column_int64(stmt.get(), 0));
+        row.op = column_text(stmt.get(), 1);
+        row.name = column_text(stmt.get(), 2);
+        row.type = static_cast<std::uint16_t>(sqlite3_column_int(stmt.get(), 3));
+        row.ttl = static_cast<std::uint32_t>(sqlite3_column_int64(stmt.get(), 4));
+        auto decoded = decode_data(column_text(stmt.get(), 5));
+        if (decoded) row.data = std::move(decoded.value());
+        row.created_at = static_cast<std::uint64_t>(sqlite3_column_int64(stmt.get(), 6));
+        row.ts = static_cast<std::uint64_t>(sqlite3_column_int64(stmt.get(), 7));
+        out.push_back(std::move(row));
+    }
+    return out;
+}
+
+Result<std::uint64_t> Store::oldest_op_seq() {
+    std::lock_guard lock(mutex_);
+    Statement stmt(db_, "SELECT MIN(seq) FROM op_log;");
+    if (!stmt) return db_error(423, "query oldest op seq");
+    if (sqlite3_step(stmt.get()) == SQLITE_ROW && sqlite3_column_type(stmt.get(), 0) != SQLITE_NULL) {
+        return static_cast<std::uint64_t>(sqlite3_column_int64(stmt.get(), 0));
+    }
+    return 0;
+}
+
+Result<void> Store::purge_op_log_before(std::uint64_t before_seq) {
+    std::lock_guard lock(mutex_);
+    Statement stmt(db_, "DELETE FROM op_log WHERE seq < ?1;");
+    if (!stmt) return db_error(424, "purge op log");
+    const auto bound_before = std::min<std::uint64_t>(before_seq, static_cast<std::uint64_t>(INT64_MAX));
+    sqlite3_bind_int64(stmt.get(), 1, static_cast<sqlite3_int64>(bound_before));
+    if (sqlite3_step(stmt.get()) != SQLITE_DONE) return db_error(424, "purge op log");
+    return {};
+}
+
+Result<std::vector<PeerRecordRow>> Store::peer_records(const NodeId& owner_id) {
+    std::lock_guard lock(mutex_);
+    Statement stmt(db_, "SELECT owner_id, name, type, ttl, data_json, created_at FROM peer_records WHERE owner_id = ?1;");
+    if (!stmt) return db_error(425, "query peer records");
+    sqlite3_bind_blob(stmt.get(), 1, owner_id.data(), static_cast<int>(owner_id.size()), SQLITE_TRANSIENT);
+
+    std::vector<PeerRecordRow> out;
+    while (true) {
+        const int rc = sqlite3_step(stmt.get());
+        if (rc == SQLITE_DONE) break;
+        if (rc != SQLITE_ROW) return db_error(425, "query peer records");
+
+        PeerRecordRow row;
+        row.owner_id = owner_id;
+        row.name = column_text(stmt.get(), 1);
+        row.type = static_cast<std::uint16_t>(sqlite3_column_int(stmt.get(), 2));
+        row.ttl = static_cast<std::uint32_t>(sqlite3_column_int64(stmt.get(), 3));
+        auto decoded = decode_data(column_text(stmt.get(), 4));
+        if (decoded) row.data = std::move(decoded.value());
+        row.created_at = static_cast<std::uint64_t>(sqlite3_column_int64(stmt.get(), 5));
+        out.push_back(std::move(row));
+    }
+    return out;
+}
+
+Result<std::vector<PeerRecordRow>> Store::all_peer_records() {
+    std::lock_guard lock(mutex_);
+    Statement stmt(db_, "SELECT owner_id, name, type, ttl, data_json, created_at FROM peer_records;");
+    if (!stmt) return db_error(426, "query all peer records");
+
+    std::vector<PeerRecordRow> out;
+    while (true) {
+        const int rc = sqlite3_step(stmt.get());
+        if (rc == SQLITE_DONE) break;
+        if (rc != SQLITE_ROW) return db_error(426, "query all peer records");
+
+        PeerRecordRow row;
+        const void* blob = sqlite3_column_blob(stmt.get(), 0);
+        const int bytes = sqlite3_column_bytes(stmt.get(), 0);
+        if (bytes == 16 && blob != nullptr) {
+            std::memcpy(row.owner_id.data(), blob, 16);
+        }
+        row.name = column_text(stmt.get(), 1);
+        row.type = static_cast<std::uint16_t>(sqlite3_column_int(stmt.get(), 2));
+        row.ttl = static_cast<std::uint32_t>(sqlite3_column_int64(stmt.get(), 3));
+        auto decoded = decode_data(column_text(stmt.get(), 4));
+        if (decoded) row.data = std::move(decoded.value());
+        row.created_at = static_cast<std::uint64_t>(sqlite3_column_int64(stmt.get(), 5));
+        out.push_back(std::move(row));
+    }
+    return out;
+}
+
+Result<void> Store::put_peer_record(const PeerRecordRow& row) {
+    std::lock_guard lock(mutex_);
+    Statement stmt(db_,
+                   "INSERT INTO peer_records(owner_id, name, type, ttl, data_json, created_at) "
+                   "VALUES(?1, ?2, ?3, ?4, ?5, ?6) "
+                   "ON CONFLICT(owner_id, name, type) DO UPDATE SET "
+                   "ttl = excluded.ttl, data_json = excluded.data_json, created_at = excluded.created_at;");
+    if (!stmt) return db_error(427, "put peer record");
+
+    auto encoded = encode_data(row.data);
+    if (!encoded) return encoded.error();
+
+    sqlite3_bind_blob(stmt.get(), 1, row.owner_id.data(), static_cast<int>(row.owner_id.size()), SQLITE_TRANSIENT);
+    bind_text(stmt.get(), 2, row.name);
+    sqlite3_bind_int(stmt.get(), 3, row.type);
+    sqlite3_bind_int64(stmt.get(), 4, row.ttl);
+    bind_text(stmt.get(), 5, encoded.value());
+    sqlite3_bind_int64(stmt.get(), 6, static_cast<sqlite3_int64>(row.created_at));
+
+    if (sqlite3_step(stmt.get()) != SQLITE_DONE) return db_error(427, "put peer record");
+    return {};
+}
+
+Result<bool> Store::delete_peer_record(const NodeId& owner_id, std::string_view name, std::uint16_t type) {
+    std::lock_guard lock(mutex_);
+    Statement stmt(db_, "DELETE FROM peer_records WHERE owner_id = ?1 AND name = ?2 AND type = ?3;");
+    if (!stmt) return db_error(428, "delete peer record");
+    sqlite3_bind_blob(stmt.get(), 1, owner_id.data(), static_cast<int>(owner_id.size()), SQLITE_TRANSIENT);
+    bind_text(stmt.get(), 2, name);
+    sqlite3_bind_int(stmt.get(), 3, type);
+    if (sqlite3_step(stmt.get()) != SQLITE_DONE) return db_error(428, "delete peer record");
+    return sqlite3_changes(db_) > 0;
+}
+
+Result<void> Store::replace_peer_records(const NodeId& owner_id, const std::vector<PeerRecordRow>& rows) {
+    std::lock_guard lock(mutex_);
+    auto tx = begin();
+    if (!tx) return tx.error();
+
+    if (auto status = delete_peer_records_for_owner(owner_id); !status) return status;
+    for (const auto& r : rows) {
+        if (auto status = put_peer_record(r); !status) return status;
+    }
+    return tx.value().commit();
+}
+
+Result<void> Store::delete_peer_records_for_owner(const NodeId& owner_id) {
+    std::lock_guard lock(mutex_);
+    Statement stmt(db_, "DELETE FROM peer_records WHERE owner_id = ?1;");
+    if (!stmt) return db_error(429, "delete peer records for owner");
+    sqlite3_bind_blob(stmt.get(), 1, owner_id.data(), static_cast<int>(owner_id.size()), SQLITE_TRANSIENT);
+    if (sqlite3_step(stmt.get()) != SQLITE_DONE) return db_error(429, "delete peer records for owner");
+    return {};
+}
+
 Result<std::vector<UpstreamRow>> Store::upstreams() {
     std::lock_guard lock(mutex_);
     Statement stmt(db_, "SELECT address, port, proto FROM upstreams ORDER BY idx;");

@@ -1,6 +1,7 @@
 #include "doctest.hpp"
 
 #include "core/store/store.hpp"
+#include "core/store/migrations.hpp"
 
 #include <filesystem>
 #include <string>
@@ -48,7 +49,7 @@ TEST_CASE("Store opens in memory and migrates to the current schema") {
 
     auto stored = store.value().meta("schema_version");
     REQUIRE(stored.has_value());
-    CHECK(stored.value().value() == "1");
+    CHECK(stored.value().value() == std::to_string(store_detail::kSchemaVersion));
 }
 
 TEST_CASE("identity is stable across reopens of the same file") {
@@ -216,3 +217,153 @@ TEST_CASE("opening a directory path fails cleanly") {
     auto store = Store::open(options);
     CHECK_FALSE(store.has_value());
 }
+
+TEST_CASE("op_log logging, querying, and purging") {
+    auto store = Store::open(memory_options());
+    REQUIRE(store.has_value());
+
+    // Initially oldest is 0
+    auto oldest = store.value().oldest_op_seq();
+    REQUIRE(oldest.has_value());
+    CHECK(oldest.value() == 0);
+
+    // Empty ops_since
+    auto empty_ops = store.value().ops_since(0);
+    REQUIRE(empty_ops.has_value());
+    CHECK(empty_ops.value().empty());
+
+    OpLogRow op1;
+    op1.seq = 1;
+    op1.op = "put";
+    op1.name = "web.internal";
+    op1.type = 1; // A
+    op1.ttl = 300;
+    op1.data = {{10, 0, 0, 1}};
+    op1.created_at = 100;
+    op1.ts = 100;
+    REQUIRE(store.value().log_op(op1).has_value());
+
+    OpLogRow op2;
+    op2.seq = 2;
+    op2.op = "put";
+    op2.name = "db.internal";
+    op2.type = 1;
+    op2.ttl = 60;
+    op2.data = {{10, 0, 0, 2}};
+    op2.created_at = 101;
+    op2.ts = 101;
+    REQUIRE(store.value().log_op(op2).has_value());
+
+    OpLogRow op3;
+    op3.seq = 3;
+    op3.op = "del";
+    op3.name = "web.internal";
+    op3.type = 1;
+    op3.ttl = 0;
+    op3.data = {};
+    op3.created_at = 100;
+    op3.ts = 102;
+    REQUIRE(store.value().log_op(op3).has_value());
+
+    // Check oldest
+    oldest = store.value().oldest_op_seq();
+    REQUIRE(oldest.has_value());
+    CHECK(oldest.value() == 1);
+
+    // Query ops_since(0) -> all 3
+    auto all_ops = store.value().ops_since(0);
+    REQUIRE(all_ops.has_value());
+    REQUIRE(all_ops.value().size() == 3);
+    CHECK(all_ops.value()[0].name == "web.internal");
+    CHECK(all_ops.value()[0].op == "put");
+    CHECK(all_ops.value()[1].name == "db.internal");
+    CHECK(all_ops.value()[2].op == "del");
+
+    // Query ops_since(1) -> seq 2 and 3
+    auto since1 = store.value().ops_since(1);
+    REQUIRE(since1.has_value());
+    REQUIRE(since1.value().size() == 2);
+    CHECK(since1.value()[0].seq == 2);
+    CHECK(since1.value()[1].seq == 3);
+
+    // Query ops_since(1, 2) -> seq 2 only
+    auto since1_max2 = store.value().ops_since(1, 2);
+    REQUIRE(since1_max2.has_value());
+    REQUIRE(since1_max2.value().size() == 1);
+    CHECK(since1_max2.value()[0].seq == 2);
+
+    // Purge before seq 3 -> removes seq 1 and 2
+    REQUIRE(store.value().purge_op_log_before(3).has_value());
+    oldest = store.value().oldest_op_seq();
+    REQUIRE(oldest.has_value());
+    CHECK(oldest.value() == 3);
+
+    auto remaining = store.value().ops_since(0);
+    REQUIRE(remaining.has_value());
+    REQUIRE(remaining.value().size() == 1);
+    CHECK(remaining.value()[0].seq == 3);
+}
+
+TEST_CASE("peer_records CRUD, replace, and purge") {
+    auto store = Store::open(memory_options());
+    REQUIRE(store.has_value());
+
+    NodeId node_a{};
+    node_a[0] = 0xAA;
+    NodeId node_b{};
+    node_b[0] = 0xBB;
+
+    // Initially empty
+    auto all = store.value().all_peer_records();
+    REQUIRE(all.has_value());
+    CHECK(all.value().empty());
+
+    PeerRecordRow r1;
+    r1.owner_id = node_a;
+    r1.name = "node-a.lan";
+    r1.type = 1;
+    r1.ttl = 300;
+    r1.data = {{192, 168, 1, 100}};
+    r1.created_at = 50;
+    REQUIRE(store.value().put_peer_record(r1).has_value());
+
+    PeerRecordRow r2;
+    r2.owner_id = node_b;
+    r2.name = "node-b.lan";
+    r2.type = 1;
+    r2.ttl = 300;
+    r2.data = {{192, 168, 1, 101}};
+    r2.created_at = 60;
+    REQUIRE(store.value().put_peer_record(r2).has_value());
+
+    all = store.value().all_peer_records();
+    REQUIRE(all.has_value());
+    CHECK(all.value().size() == 2);
+
+    auto a_records = store.value().peer_records(node_a);
+    REQUIRE(a_records.has_value());
+    REQUIRE(a_records.value().size() == 1);
+    CHECK(a_records.value()[0].name == "node-a.lan");
+
+    // Delete single peer record
+    auto deleted = store.value().delete_peer_record(node_a, "node-a.lan", 1);
+    REQUIRE(deleted.has_value());
+    CHECK(deleted.value() == true);
+    CHECK(store.value().peer_records(node_a).value().empty());
+
+    // replace_peer_records for node_a
+    std::vector<PeerRecordRow> new_a = {
+        {node_a, "sub1.node-a.lan", 1, 120, {{10, 1, 1, 1}}, 70},
+        {node_a, "sub2.node-a.lan", 1, 120, {{10, 1, 1, 2}}, 71},
+    };
+    REQUIRE(store.value().replace_peer_records(node_a, new_a).has_value());
+    a_records = store.value().peer_records(node_a);
+    REQUIRE(a_records.has_value());
+    CHECK(a_records.value().size() == 2);
+
+    // delete_peer_records_for_owner
+    REQUIRE(store.value().delete_peer_records_for_owner(node_a).has_value());
+    CHECK(store.value().peer_records(node_a).value().empty());
+    CHECK(store.value().peer_records(node_b).value().size() == 1);
+}
+

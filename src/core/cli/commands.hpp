@@ -113,4 +113,18 @@ struct PeerForgetOptions {
 Result<void> peer_forget(CoreApi& api, const PeerForgetOptions& options,
                          std::ostream& out = std::cout);
 
+struct ConflictsOptions {
+    bool json{false};
+};
+Result<std::vector<resolver::ConflictRecord>> conflicts(CoreApi& api, const ConflictsOptions& options,
+                                                        std::ostream& out = std::cout);
+
+struct InfoOptions {
+    std::string name;
+    std::string type{"A"};
+    bool json{false};
+};
+Result<DomainInfo> info(CoreApi& api, const InfoOptions& options,
+                        std::ostream& out = std::cout);
+
 }  // namespace ldns::cli

@@ -321,3 +321,30 @@
 - Cần chú ý: Tuân thủ quy định `CLAUDE.md` §6: nhánh `feat/ux-ui` gọi toàn bộ logic qua `CoreApi`, không viết lại logic core trong tầng UI.
 - Bug/lỗ hổng: 0 lỗi.
 - Tiếp theo: Bàn giao để người dùng kiểm tra TUI trên terminal.
+
+## 2026-10-31 16:15 — bước quan trọng (merge main M5/M6 vào feat/ux-ui, giải quyết conflict tests/CMakeLists.txt và kiểm thử đa nền tảng)
+- Việc đã làm:
+  - Nhận yêu cầu từ người dùng: Đọc lại toàn bộ quy tắc dự án trong `CLAUDE.md`, merge nhánh `main` vào `feat/ux-ui`, khắc phục toàn bộ xung đột (conflicts), kiểm tra và test lại.
+  - Chạy `git merge main --no-commit` để tích hợp 2 milestone lớn từ `main`:
+    * Milestone 5 (`b5b36ce`): Real-time Registry Sync & Oplog Engine, đồng bộ dữ liệu P2P thời gian thực giữa các peer.
+    * Milestone 6 (`46fe4c6`): PeerResolver voting, peer ranking (RTT + reputation), hedging queries, và bổ sung các lệnh CLI `ldns conflicts` và `ldns info <name>`.
+  - Khắc phục conflict trong `tests/CMakeLists.txt`:
+    * Giữ nguyên `test_ui.cpp` và thư viện liên kết `ldns_ui`.
+    * Tích hợp 5 test suites mới của M5 & M6 từ `main`: `test_registry.cpp`, `test_sync.cpp`, `test_peer_ranking.cpp`, `test_peer_resolver.cpp`, `test_peer_e2e.cpp`.
+  - Kiểm tra auto-merge trong `src/main.cpp`:
+    * Tích hợp đầy đủ các subcommand mới `conflicts` và `info`.
+    * Bảo toàn 100% logic khởi chạy Claude Code Inline TUI khi không truyền tham số CLI.
+    * Đảm bảo không còn bất kỳ conflict marker nào (`git diff --check` đạt 0 lỗi).
+  - Kiểm thử đa nền tảng toàn diện (Matrix Testing) - 100% PASS:
+    1. **Windows MSVC Debug (C++20):**
+       - Build `cmake --build --preset local-windows-msvc-debug`: Thành công 0 lỗi.
+       - Chạy `ctest --preset local-windows-msvc-debug`: 100% tests passed.
+       - Chạy trực tiếp `ldns_tests.exe`: **219 test cases / 2761 assertions pass (0 failed, 0 skipped)**.
+    2. **Linux WSL GCC 13 Debug:**
+       - Chạy `scripts/wsl-build.sh test linux-debug`: Build 58/58 targets, ctest **100% tests passed**.
+    3. **Linux WSL GCC 13 ASan/UBSan:**
+       - Chạy `scripts/wsl-build.sh test linux-asan`: Build 58/58 targets, ctest **100% tests passed**, **0 memory leak, 0 undefined behavior**.
+- File liên quan: `tests/CMakeLists.txt`, `src/main.cpp`, `process-ui.md`.
+- Cần chú ý: Tuân thủ nghiêm ngặt quy tắc `CLAUDE.md` §2 và §2.1: Tuyệt đối KHÔNG tự ý commit hay push khi chưa được yêu cầu rõ ràng. Trình bày chi tiết kết quả test và đề xuất commit message để người dùng quyết định.
+- Bug/lỗ hổng: 0 lỗi.
+- Tiếp theo: Trình bày kết quả kiểm thử và đề xuất commit message chi tiết cho người dùng duyệt.
