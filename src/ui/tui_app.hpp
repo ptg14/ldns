@@ -63,6 +63,7 @@ private:
 
     WelcomeInfo welcome_info_;
     bool has_executed_command_ = false;
+    bool suppressing_self_events_ = false;
 
     struct ScrollbackEntry {
         bool is_welcome = false;

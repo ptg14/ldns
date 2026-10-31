@@ -1,10 +1,13 @@
 #include "ui/tui_app.hpp"
 #include "core/core_api.hpp"
-#include "core/util/id.hpp"
+#include "core/dns/message.hpp"
+#include "core/domain/domain_service.hpp"
+#include "core/net/peer_manager.hpp"
+#include "core/resolver/peer_ranking.hpp"
+#include "core/resolver/peer_resolver.hpp"
 #include "core/resolver/pipeline.hpp"
 #include "core/resolver/query_log.hpp"
-#include "core/net/peer_manager.hpp"
-#include "core/domain/domain_service.hpp"
+#include "core/util/id.hpp"
 #include "core/version.hpp"
 
 #include <chrono>
@@ -18,6 +21,49 @@
 #include "ui/widgets/spinner.hpp"
 #include "ui/widgets/trace_view.hpp"
 #include "ui/widgets/welcome_panel.hpp"
+
+namespace {
+
+std::vector<std::string> tokenize_args(std::string_view line) {
+    std::vector<std::string> tokens;
+    std::string cur;
+    bool in_quote = false;
+    char quote_char = '\0';
+    for (size_t i = 0; i < line.size(); ++i) {
+        char c = line[i];
+        if (in_quote) {
+            if (c == quote_char) {
+                in_quote = false;
+            } else {
+                cur.push_back(c);
+            }
+        } else {
+            if (c == '"' || c == '\'') {
+                in_quote = true;
+                quote_char = c;
+            } else if (std::isspace(static_cast<unsigned char>(c))) {
+                if (!cur.empty()) {
+                    tokens.push_back(std::move(cur));
+                    cur.clear();
+                }
+            } else {
+                cur.push_back(c);
+            }
+        }
+    }
+    if (!cur.empty()) {
+        tokens.push_back(std::move(cur));
+    }
+    return tokens;
+}
+
+struct EventSuppressGuard {
+    bool& flag;
+    explicit EventSuppressGuard(bool& f) : flag(f) { flag = true; }
+    ~EventSuppressGuard() { flag = false; }
+};
+
+} // namespace
 
 namespace ldns::ui {
 
@@ -99,6 +145,7 @@ TuiApp::TuiApp(std::unique_ptr<CoreApi> core)
 
         // Real-time EventBus notification listener
         core_->set_event_handler([this](const domain::DomainEvent& ev) {
+            if (suppressing_self_events_) return;
             std::string action = (ev.kind == domain::EventType::RecordPut) ? "Cập nhật domain" : "Xóa domain";
             inject_event(action + ": " + ev.name + " (" + ev.type + ") · seq " + std::to_string(ev.seq));
         });
@@ -248,7 +295,7 @@ void TuiApp::handle_logs_follow() {
         if (term_.has_byte_pending(600)) {
             TerminalSize last_sz = term_.size();
             InputEvent ev = InputParser::read_next_event(term_, &last_sz);
-            if (ev.type == KeyType::Esc || (ev.type == KeyType::Character && (ev.text == "q" || ev.text == "Q"))) {
+            if (ev.type == KeyType::Esc || ev.type == KeyType::CtrlC || (ev.type == KeyType::Character && (ev.text == "q" || ev.text == "Q"))) {
                 break;
             }
         }
@@ -505,6 +552,7 @@ int TuiApp::run() {
 }
 
 void TuiApp::handle_command(const std::string& cmd_line) {
+    EventSuppressGuard suppress_guard(suppressing_self_events_);
     if (!has_executed_command_) {
         has_executed_command_ = true;
         scrollback_entries_.push_back({true, {}});
@@ -634,38 +682,53 @@ void TuiApp::handle_command(const std::string& cmd_line) {
     }
 
     if (cmd == "/add") {
-        std::string name;
-        std::string target;
-        iss >> name >> target;
-        if (name.empty()) {
-            add_scrollback(Style::error("Lỗi: Thiếu tên domain. Cú pháp: /add <tên> [đích] [--force]"));
+        auto tokens = tokenize_args(cmd_line);
+        if (tokens.size() < 2) {
+            add_scrollback(Style::error("Lỗi: Thiếu tên domain. Cú pháp: /add <tên> [đích...] [--type A|AAAA|CNAME|TXT] [--ttl N] [--force]"));
             return;
         }
 
-        bool force = (cmd_line.find("--force") != std::string::npos);
-        if (target == "--force") target.clear();
+        std::string name = tokens[1];
+        std::string type = "A";
+        std::vector<std::string> targets;
+        uint32_t ttl = 0;
+        bool force = false;
+
+        for (size_t i = 2; i < tokens.size(); ++i) {
+            if (tokens[i] == "--force") {
+                force = true;
+            } else if (tokens[i] == "--type" && i + 1 < tokens.size()) {
+                type = tokens[++i];
+            } else if (tokens[i] == "--ttl" && i + 1 < tokens.size()) {
+                ttl = static_cast<uint32_t>(std::strtoul(tokens[++i].c_str(), nullptr, 10));
+            } else if (!tokens[i].starts_with("--")) {
+                targets.push_back(tokens[i]);
+            }
+        }
 
         if (core_) {
             domain::AddRequest req;
             req.name = name;
-            req.type = "A";
+            req.type = type;
             req.force = force;
+            req.ttl = ttl > 0 ? ttl : domain::kDefaultTtl;
 
-            if (target.empty()) {
+            bool is_self = targets.empty() || (targets.size() == 1 && targets[0] == "self");
+            if (is_self) {
                 req.kind = domain::TargetKind::Self;
             } else {
-                req.targets = {target};
+                req.targets = targets;
                 req.kind = domain::TargetKind::Static;
             }
 
-            auto add_res = target.empty() ? core_->add_self_domain(name, "A", 0)
-                                          : core_->add_domain(req);
+            auto add_res = is_self ? core_->add_self_domain(name, type, ttl)
+                                   : core_->add_domain(req);
             if (!add_res) {
                 if (add_res.error().code == 703) {
                     add_scrollback(Style::error("Lỗi: Domain " + name + " đã tồn tại. Dùng /set " + name + " <đích> để đổi IP đích."));
                 } else if (add_res.error().code == 705) {
                     add_scrollback(Style::warning("Cảnh báo: Tên miền thuộc Public TLD của Internet toàn cầu."));
-                    add_scrollback(Style::glyph_indent() + "  Thêm cờ --force nếu bạn chắc chắn muốn ghi đè: /add " + name + (target.empty() ? "" : " " + target) + " --force");
+                    add_scrollback(Style::glyph_indent() + "  Thêm cờ --force nếu bạn chắc chắn muốn ghi đè: /add " + name + (targets.empty() ? "" : " " + targets.front()) + " --force");
                 } else {
                     add_scrollback(Style::error("Lỗi: " + add_res.error().message));
                 }
@@ -681,38 +744,52 @@ void TuiApp::handle_command(const std::string& cmd_line) {
             if (entry.target_kind == "self") tg += " (self)";
 
             stats_.domain_count = core_->status().domain_count;
-            add_scrollback(Style::success(Style::glyph_bullet()) + "  Đã thêm " + Style::bold(entry.name) + " → " + tg);
+            add_scrollback(Style::success(Style::glyph_bullet()) + "  Đã thêm " + Style::bold(entry.name) + " [" + entry.type + "] → " + tg);
             add_scrollback(Style::glyph_indent() + "  Bản ghi đã lưu vào SQLite và cập nhật LocalZone (TTL " + std::to_string(entry.ttl) + "s)");
             return;
         }
 
-        if (target.empty()) {
-            target = "192.168.1.10 (self)";
-        }
-        my_domains_.push_back({name, target});
+        std::string tg_desc = targets.empty() ? "192.168.1.10 (self)" : targets.front();
+        my_domains_.push_back({name, tg_desc});
         stats_.domain_count++;
 
-        add_scrollback(Style::success(Style::glyph_bullet()) + "  Đã thêm " + Style::bold(name) + " → " + target);
+        add_scrollback(Style::success(Style::glyph_bullet()) + "  Đã thêm " + Style::bold(name) + " [" + type + "] → " + tg_desc);
         add_scrollback(Style::glyph_indent() + "  TTL 60s · đã đồng bộ tới " + std::to_string(my_peers_.size()) + " peer trong 32 ms");
         return;
     }
 
     if (cmd == "/set") {
-        std::string name;
-        std::string target;
-        iss >> name >> target;
-        if (name.empty() || target.empty()) {
-            add_scrollback(Style::error("Lỗi: Thiếu tham số. Cú pháp: /set <tên> <đích mới> [--force]"));
+        auto tokens = tokenize_args(cmd_line);
+        if (tokens.size() < 3) {
+            add_scrollback(Style::error("Lỗi: Thiếu tham số. Cú pháp: /set <tên> <đích mới...> [--type A|AAAA|CNAME|TXT] [--force]"));
             return;
         }
 
-        bool force = (cmd_line.find("--force") != std::string::npos);
+        std::string name = tokens[1];
+        std::string type = "A";
+        std::vector<std::string> targets;
+        bool force = false;
+
+        for (size_t i = 2; i < tokens.size(); ++i) {
+            if (tokens[i] == "--force") {
+                force = true;
+            } else if (tokens[i] == "--type" && i + 1 < tokens.size()) {
+                type = tokens[++i];
+            } else if (!tokens[i].starts_with("--")) {
+                targets.push_back(tokens[i]);
+            }
+        }
+
+        if (targets.empty()) {
+            add_scrollback(Style::error("Lỗi: Cần cung cấp ít nhất 1 địa chỉ đích mới."));
+            return;
+        }
 
         if (core_) {
             domain::AddRequest req;
             req.name = name;
-            req.type = "A";
-            req.targets = {target};
+            req.type = type;
+            req.targets = targets;
             req.kind = domain::TargetKind::Static;
             req.force = force;
 
@@ -728,40 +805,59 @@ void TuiApp::handle_command(const std::string& cmd_line) {
                 return;
             }
 
-            add_scrollback(Style::success(Style::glyph_bullet()) + "  Đã cập nhật đích cho " + Style::bold(name) + " → " + target);
+            std::string tg_all;
+            for (size_t i = 0; i < targets.size(); ++i) {
+                if (i > 0) tg_all += ", ";
+                tg_all += targets[i];
+            }
+            add_scrollback(Style::success(Style::glyph_bullet()) + "  Đã cập nhật đích cho " + Style::bold(name) + " [" + type + "] → " + tg_all);
             add_scrollback(Style::glyph_indent() + "  Bản ghi SQLite đã được cập nhật thành công.");
             return;
         }
 
+        std::string tg_first = targets.front();
         bool found = false;
         for (auto& d : my_domains_) {
             if (d.first == name) {
-                d.second = target;
+                d.second = tg_first;
                 found = true;
                 break;
             }
         }
         if (!found) {
-            my_domains_.push_back({name, target});
+            my_domains_.push_back({name, tg_first});
             stats_.domain_count++;
         }
-        add_scrollback(Style::success(Style::glyph_bullet()) + "  Đã cập nhật đích cho " + Style::bold(name) + " → " + target);
+        add_scrollback(Style::success(Style::glyph_bullet()) + "  Đã cập nhật đích cho " + Style::bold(name) + " → " + tg_first);
         add_scrollback(Style::glyph_indent() + "  Thay đổi đã được phát tán thời gian thực tới " +
                        std::to_string(my_peers_.size()) + " peer.");
         return;
     }
 
     if (cmd == "/ls") {
+        auto tokens = tokenize_args(cmd_line);
+        std::optional<std::string> filter_type;
+        for (size_t i = 1; i < tokens.size(); ++i) {
+            if (tokens[i] == "--type" && i + 1 < tokens.size()) {
+                filter_type = tokens[++i];
+            } else if (!tokens[i].starts_with("--")) {
+                filter_type = tokens[i];
+            }
+        }
+
         std::vector<std::string> lines;
         if (core_) {
-            auto list_res = core_->list_domains();
+            auto list_res = core_->list_domains(filter_type);
             if (!list_res) {
                 add_scrollback(Style::error("Lỗi đọc danh sách: " + list_res.error().message));
                 return;
             }
             const auto& entries = list_res.value();
-            lines.push_back(Style::primary(Style::glyph_bullet()) + "  Danh sách domain cục bộ (" +
-                           std::to_string(entries.size()) + " bản ghi trong SQLite):");
+            std::string header = Style::primary(Style::glyph_bullet()) + "  Danh sách domain cục bộ (" +
+                                 std::to_string(entries.size()) + " bản ghi trong SQLite";
+            if (filter_type) header += " [loại " + *filter_type + "]";
+            header += "):";
+            lines.push_back(header);
             if (entries.empty()) {
                 lines.push_back(Style::dim("    (Trống - gõ /add <tên> để tạo domain đầu tiên)"));
             } else {
@@ -789,21 +885,30 @@ void TuiApp::handle_command(const std::string& cmd_line) {
     }
 
     if (cmd == "/rm") {
-        std::string name;
-        iss >> name;
-        if (name.empty()) {
-            add_scrollback(Style::error("Lỗi: Thiếu tên domain. Cú pháp: /rm <tên>"));
+        auto tokens = tokenize_args(cmd_line);
+        if (tokens.size() < 2) {
+            add_scrollback(Style::error("Lỗi: Thiếu tên domain. Cú pháp: /rm <tên> [--type A|AAAA|CNAME|TXT]"));
             return;
         }
 
+        std::string name = tokens[1];
+        std::string type = "A";
+        for (size_t i = 2; i < tokens.size(); ++i) {
+            if (tokens[i] == "--type" && i + 1 < tokens.size()) {
+                type = tokens[++i];
+            } else if (!tokens[i].starts_with("--")) {
+                type = tokens[i];
+            }
+        }
+
         if (core_) {
-            auto rm_res = core_->remove_domain(name, "A");
+            auto rm_res = core_->remove_domain(name, type);
             if (!rm_res) {
                 add_scrollback(Style::error("Lỗi xóa: " + rm_res.error().message));
                 return;
             }
             stats_.domain_count = core_->status().domain_count;
-            add_scrollback(Style::success(Style::glyph_bullet()) + "  Đã xóa domain " + Style::bold(name));
+            add_scrollback(Style::success(Style::glyph_bullet()) + "  Đã xóa domain " + Style::bold(name) + " [" + type + "]");
             add_scrollback(Style::glyph_indent() + "  Bản ghi đã bị xóa khỏi SQLite và LocalZone.");
             return;
         }
@@ -825,7 +930,6 @@ void TuiApp::handle_command(const std::string& cmd_line) {
         }
         return;
     }
-
     if (cmd == "/import") {
         std::string file;
         iss >> file;
@@ -880,10 +984,65 @@ void TuiApp::handle_command(const std::string& cmd_line) {
 
     if (cmd == "/info") {
         std::string name;
+        std::string type = "A";
         iss >> name;
         if (name.empty()) {
-            add_scrollback(Style::error("Lỗi: Thiếu tên domain cần tra cứu. Cú pháp: /info <tên>"));
+            add_scrollback(Style::error("Lỗi: Thiếu tên domain cần tra cứu. Cú pháp: /info <tên> [--type A|AAAA|CNAME|TXT]"));
             return;
+        }
+        std::string next_tok;
+        while (iss >> next_tok) {
+            if (next_tok == "--type") {
+                iss >> type;
+            } else if (!next_tok.starts_with("--")) {
+                type = next_tok;
+            }
+        }
+
+        if (core_) {
+            auto info_res = core_->domain_info(name, type);
+            if (info_res) {
+                const auto& inf = info_res.value();
+                DomainInfo info;
+                info.domain = inf.name.to_string();
+                info.record_type = type;
+                info.is_local = inf.has_local;
+                if (inf.has_local) {
+                    info.owner_node = "bạn (cục bộ)";
+                    for (size_t i = 0; i < inf.local_records.size(); ++i) {
+                        if (i > 0) info.target += ", ";
+                        info.target += inf.local_records[i];
+                    }
+                }
+                if (!inf.ranking.groups.empty()) {
+                    const auto& win = inf.ranking.groups.front();
+                    info.vote_count = static_cast<int>(win.vote_count);
+                    info.total_peers = static_cast<int>(my_peers_.size());
+                    if (info.target.empty()) {
+                        for (size_t i = 0; i < win.canonical_data.size(); ++i) {
+                            if (i > 0) info.target += ", ";
+                            info.target += dns::format_rdata(win.type, win.canonical_data[i]);
+                        }
+                    }
+                    if (!win.candidates.empty()) {
+                        info.owner_node = short_id(win.candidates.front().node_id);
+                        info.owner_ip = "(peer)";
+                    }
+                }
+                info.sync_status = inf.has_conflict ? "Xung đột (Đang tranh chấp)" : "Đã đồng bộ";
+                if (inf.local_divergence) {
+                    info.metadata.push_back({"Local Divergence", "Bản ghi cục bộ khác với nhóm đa số của peer"});
+                }
+                info.metadata.push_back({"Tổng số nhóm bản", std::to_string(inf.ranking.groups.size())});
+                for (size_t g = 0; g < inf.ranking.groups.size(); ++g) {
+                    info.metadata.push_back({"Nhóm #" + std::to_string(g + 1),
+                        std::to_string(inf.ranking.groups[g].vote_count) + " phiếu (" +
+                        std::to_string(inf.ranking.groups[g].candidates.size()) + " peer)"});
+                }
+                auto info_lines = InfoView::render(info);
+                add_scrollback(info_lines);
+                return;
+            }
         }
 
         DomainInfo info;
@@ -894,7 +1053,7 @@ void TuiApp::handle_command(const std::string& cmd_line) {
             info.owner_ip = "192.168.1.10";
             info.is_local = true;
             info.target = "192.168.1.10 (self)";
-            info.record_type = "A";
+            info.record_type = type;
             info.ttl = "60s";
             info.vote_count = 2;
             info.total_peers = 3;
@@ -919,7 +1078,7 @@ void TuiApp::handle_command(const std::string& cmd_line) {
             info.owner_ip = is_mine ? "192.168.1.10" : "192.168.1.22";
             info.is_local = is_mine;
             info.target = target;
-            info.record_type = "A";
+            info.record_type = type;
             info.ttl = "60s";
             info.vote_count = static_cast<int>(my_peers_.size());
             info.total_peers = static_cast<int>(my_peers_.size());
@@ -1205,6 +1364,45 @@ void TuiApp::handle_command(const std::string& cmd_line) {
             add_scrollback(Style::warning(Style::glyph_bullet()) + "  Đã kích hoạt xung đột mẫu trên web.lan.");
             return;
         }
+
+        if (core_) {
+            auto confs = core_->conflicts();
+            if (confs.empty()) {
+                add_scrollback(Style::success(Style::glyph_bullet()) + "  Không có xung đột tên miền nào trong mạng!");
+                add_scrollback(Style::glyph_indent() + "  Mọi bản ghi phân giải đồng nhất giữa các peer.");
+                return;
+            }
+            std::vector<ConflictDomain> view_conflicts;
+            for (const auto& c : confs) {
+                ConflictDomain cd;
+                cd.domain = c.name.to_string();
+                cd.record_type = std::string(dns::rr_type_name(c.type));
+                int grp_id = 1;
+                for (size_t g_idx = 0; g_idx < c.groups.size(); ++g_idx) {
+                    const auto& grp = c.groups[g_idx];
+                    ConflictVoteGroup vg;
+                    vg.group_id = grp_id++;
+                    vg.vote_count = static_cast<int>(grp.vote_count);
+                    vg.is_winner = (g_idx == 0);
+                    std::string target_str;
+                    for (size_t d_idx = 0; d_idx < grp.canonical_data.size(); ++d_idx) {
+                        if (d_idx > 0) target_str += ", ";
+                        target_str += dns::format_rdata(grp.type, grp.canonical_data[d_idx]);
+                    }
+                    vg.target_endpoint = target_str.empty() ? "(trống)" : target_str;
+                    for (const auto& cand : grp.candidates) {
+                        vg.claimants.push_back(short_id(cand.node_id));
+                    }
+                    cd.groups.push_back(std::move(vg));
+                }
+                cd.resolution_hint = "Dùng \"/info " + cd.domain + "\" để xem chi tiết các phiếu bầu.";
+                view_conflicts.push_back(std::move(cd));
+            }
+            auto conf_lines = ConflictView::render(view_conflicts);
+            add_scrollback(conf_lines);
+            return;
+        }
+
         auto conf_lines = ConflictView::render(mock_conflicts_);
         add_scrollback(conf_lines);
         return;
@@ -1291,7 +1489,7 @@ void TuiApp::handle_command(const std::string& cmd_line) {
     if (cmd == "/service") {
         std::string sub;
         iss >> sub;
-        if (sub == "status") {
+        if (sub.empty() || sub == "status") {
             std::vector<std::string> lines;
             lines.push_back(Style::primary(Style::glyph_bullet()) + "  Trạng thái dịch vụ nền Ldns Service:");
 #if defined(_WIN32)
@@ -1335,14 +1533,45 @@ void TuiApp::handle_command(const std::string& cmd_line) {
         }
         renderer_.clear_dynamic_zone();
 
-        std::vector<DoctorItem> items = {
-            {"Cổng DNS 53", DoctorStatus::Pass, "Đã bind thành công trên 127.0.0.1 và 192.168.1.10", ""},
-            {"Quyền hệ thống", DoctorStatus::Pass, "Đang chạy với quyền đầy đủ", ""},
-            {"Tường lửa (Firewall)", DoctorStatus::Pass, "Đã mở cổng UDP 53, UDP 5390, TCP 5391", ""},
-            {"Multicast Discovery", DoctorStatus::Pass, "Nhận beacon bình thường trên Wi-Fi", ""},
-            {"DNS Hệ điều hành", DoctorStatus::Warning, "Chưa cấu hình DNS máy trỏ về 127.0.0.1", "Chạy lệnh \"/system setup\" để tự động kích hoạt"},
-            {"Upstream DNS", DoctorStatus::Pass, "Kết nối tốt tới 1.1.1.1 (14 ms) và 8.8.8.8 (18 ms)", ""}
-        };
+        std::vector<DoctorItem> items;
+        if (core_) {
+            auto st = core_->status();
+            items.push_back({"Cơ sở dữ liệu SQLite", DoctorStatus::Pass, "Tệp DB: " + st.data_file + " (" + std::to_string(st.domain_count) + " domain)", ""});
+            if (!st.config_file.empty()) {
+                items.push_back({"Cấu hình TOML", DoctorStatus::Pass, "Đã tải từ: " + st.config_file, ""});
+            } else {
+                items.push_back({"Cấu hình TOML", DoctorStatus::Pass, "Đang dùng cấu hình mặc định (in-memory)", ""});
+            }
+
+            if (!st.self_addresses.empty()) {
+                std::string addrs;
+                for (size_t i = 0; i < st.self_addresses.size(); ++i) {
+                    if (i > 0) addrs += ", ";
+                    addrs += st.self_addresses[i];
+                }
+                items.push_back({"Địa chỉ LAN (Self)", DoctorStatus::Pass, "Phát hiện interface: " + addrs, ""});
+            } else {
+                items.push_back({"Địa chỉ LAN (Self)", DoctorStatus::Warning, "Không phát hiện card mạng LAN nào", "Kiểm tra kết nối Wi-Fi/Ethernet"});
+            }
+
+            if (st.psk_configured && st.psk_key_file_found) {
+                items.push_back({"Bảo mật cụm mạng (PSK)", DoctorStatus::Pass, "Đã bật mã hóa AES-256-GCM cho cụm: " + st.network_name, ""});
+            } else {
+                items.push_back({"Bảo mật cụm mạng (PSK)", DoctorStatus::Warning, "Chưa cấu hình khóa PSK cho cụm: " + st.network_name, "Dùng \"/network key set\" để kích hoạt"});
+            }
+
+            items.push_back({"Cổng DNS 53", DoctorStatus::Pass, "Sẵn sàng nhận truy vấn từ LocalZone và PeerResolver", ""});
+            items.push_back({"DNS Hệ điều hành", DoctorStatus::Warning, "Chưa trỏ DNS máy tính về 127.0.0.1", "Chạy lệnh \"/system setup\" để tự động kích hoạt"});
+        } else {
+            items = {
+                {"Cổng DNS 53", DoctorStatus::Pass, "Đã bind thành công trên 127.0.0.1 và 192.168.1.10", ""},
+                {"Quyền hệ thống", DoctorStatus::Pass, "Đang chạy với quyền đầy đủ", ""},
+                {"Tường lửa (Firewall)", DoctorStatus::Pass, "Đã mở cổng UDP 53, UDP 5390, TCP 5391", ""},
+                {"Multicast Discovery", DoctorStatus::Pass, "Nhận beacon bình thường trên Wi-Fi", ""},
+                {"DNS Hệ điều hành", DoctorStatus::Warning, "Chưa cấu hình DNS máy trỏ về 127.0.0.1", "Chạy lệnh \"/system setup\" để tự động kích hoạt"},
+                {"Upstream DNS", DoctorStatus::Pass, "Kết nối tốt tới 1.1.1.1 (14 ms) và 8.8.8.8 (18 ms)", ""}
+            };
+        }
 
         auto doc_lines = DoctorView::render(items);
         add_scrollback(doc_lines);

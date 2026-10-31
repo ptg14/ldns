@@ -36,6 +36,7 @@ public:
     void accept_search();
     bool is_search_mode() const { return search_mode_; }
     std::string current_search_match() const;
+    const std::string& search_query() const { return search_query_; }
 
     // Text accessors
     const std::string& text() const { return text_; }

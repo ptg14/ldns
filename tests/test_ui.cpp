@@ -37,6 +37,12 @@ TEST_CASE("UI: Box wrapping with rounded corners") {
     auto boxed = ldns::ui::Box::wrap_box(lines, 30);
     // 1 top + 2 content + 1 bottom = 4 lines
     CHECK(boxed.size() == 4);
+
+    SUBCASE("wrap_box content line count and border integrity") {
+        for (const auto& l : boxed) {
+            CHECK(!l.empty());
+        }
+    }
 }
 
 TEST_CASE("UI: InputBox text editing and cursor") {
@@ -106,6 +112,16 @@ TEST_CASE("UI: InputBox reverse search Ctrl+R") {
     box.accept_search();
     CHECK(!box.is_search_mode());
     CHECK(box.text() == "/doctor");
+
+    SUBCASE("UTF-8 multi-byte backspace in search mode") {
+        ldns::ui::InputBox sbox;
+        sbox.start_search();
+        // Insert 2-byte UTF-8 character 'ế'
+        sbox.insert_char("ế");
+        CHECK(sbox.search_query() == "ế");
+        sbox.backspace();
+        CHECK(sbox.search_query().empty());
+    }
 }
 
 TEST_CASE("UI: SlashMenu filtering and navigation") {

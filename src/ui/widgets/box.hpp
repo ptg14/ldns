@@ -32,7 +32,8 @@ public:
         size_t inner_width = width - 2;
 
         BorderChars b = rounded();
-        std::string border_color = std::string(Style::kFgBorder);
+        std::string border_color = Style::no_color() ? "" : std::string(Style::kFgBorder);
+        std::string reset_color = Style::no_color() ? "" : std::string(Style::kReset);
 
         // Top line
         std::string top;
@@ -40,20 +41,20 @@ public:
         for (size_t i = 0; i < inner_width; ++i) {
             top += b.horizontal;
         }
-        top += b.top_right + std::string(Style::kReset);
+        top += b.top_right + reset_color;
         result.push_back(top);
 
         // Content lines
         for (const auto& line : lines) {
             size_t w = CharWidth::display_width(line);
-            std::string content_line = border_color + b.vertical + std::string(Style::kReset);
+            std::string content_line = border_color + b.vertical + reset_color;
             if (w <= inner_width) {
                 content_line += line;
                 content_line.append(inner_width - w, ' ');
             } else {
                 content_line += CharWidth::clip_to_width(line, inner_width);
             }
-            content_line += border_color + b.vertical + std::string(Style::kReset);
+            content_line += border_color + b.vertical + reset_color;
             result.push_back(content_line);
         }
 
@@ -63,7 +64,7 @@ public:
         for (size_t i = 0; i < inner_width; ++i) {
             bottom += b.horizontal;
         }
-        bottom += b.bottom_right + std::string(Style::kReset);
+        bottom += b.bottom_right + reset_color;
         result.push_back(bottom);
 
         return result;

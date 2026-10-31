@@ -27,7 +27,11 @@ void InputBox::insert_char(std::string_view utf8_char) {
 void InputBox::backspace() {
     if (search_mode_) {
         if (!search_query_.empty()) {
-            search_query_.pop_back();
+            size_t prev = search_query_.size() - 1;
+            while (prev > 0 && (static_cast<unsigned char>(search_query_[prev]) & 0xC0) == 0x80) {
+                --prev;
+            }
+            search_query_.erase(prev);
         }
         return;
     }
