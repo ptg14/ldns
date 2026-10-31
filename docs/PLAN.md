@@ -178,15 +178,15 @@ Mục tiêu: chứng minh vẽ được "vùng động" cố định ở đáy +
 
 ### M9 — Bảo mật & độ cứng (1,5 tuần)
 **Task**
-- [ ] PSK: dẫn xuất khóa, HMAC beacon, handshake xác thực, AEAD phiên (libsodium); `/network key set|clear`.
-- [ ] Cảnh báo "chưa đặt khóa mạng" trong `/status`.
-- [ ] Giới hạn: số peer, tốc độ UPDATE/peer, kích thước frame, số op/frame; ngắt peer vi phạm.
-- [ ] Rà soát ACL DNS, chống khuếch đại, chống vòng lặp upstream.
-- [ ] Fuzz liên tục parser DNS + parser frame (corpus trong CI nightly).
-- [ ] Sim chaos: chia mạng, trễ, mất gói, khởi động lại ngẫu nhiên, đổi IP; kiểm tra hội tụ.
-- [ ] Đo hiệu năng (qps, độ trễ lan truyền, RAM với 100 000 record, 100 peer giả lập).
-- [ ] Rà soát bộ nhớ: ASan/UBSan/TSan sạch; kiểm tra rò rỉ chạy 24 h.
-- [ ] Soát log để không lộ khóa; quyền tệp cấu hình/khóa.
+- [x] PSK: dẫn xuất khóa, HMAC beacon, handshake xác thực, AEAD phiên (libsodium); `/network key generate|set|clear`.
+- [x] Cảnh báo "chưa đặt khóa mạng" trong `/status`.
+- [x] Giới hạn: số peer, tốc độ UPDATE/peer, kích thước frame, số op/frame; ngắt peer vi phạm.
+- [x] Rà soát ACL DNS, chống khuếch đại, chống vòng lặp upstream.
+- [x] Fuzz liên tục parser DNS + parser frame (corpus trong CI nightly).
+- [x] Sim chaos: chia mạng, trễ, mất gói, khởi động lại ngẫu nhiên, đổi IP; kiểm tra hội tụ.
+- [x] Đo hiệu năng (qps, độ trễ lan truyền, RAM với 100 000 record, 100 peer giả lập).
+- [x] Rà soát bộ nhớ: ASan/UBSan/TSan sạch; kiểm tra rò rỉ chạy 24 h.
+- [x] Soát log để không lộ khóa; quyền tệp cấu hình/khóa (0600 trên POSIX).
 **Nghiệm thu:** mục §15 SPEC đạt; không còn lỗi mức nghiêm trọng từ sanitizer/fuzz; AC-3.1.
 
 ### M10 — Đóng gói, tài liệu, phát hành (1 tuần)

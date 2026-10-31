@@ -8,10 +8,16 @@
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include <filesystem>
+#ifndef _WIN32
+#include <sys/stat.h>
+#endif
 
 #include <nlohmann/json.hpp>
 
 #include "core/domain/import_export.hpp"
+#include "core/net/crypto.hpp"
+#include "core/util/id.hpp"
 
 namespace ldns::cli {
 namespace {
@@ -824,6 +830,209 @@ Result<void> firewall_cmd(const FirewallOptions& options, std::ostream& out) {
     out << "  Port 53 (DNS): " << (st.has_dns_rule ? "Allowed" : "Not configured") << '\n';
     out << "  Port 5390 (Discovery): " << (st.has_discovery_rule ? "Allowed" : "Not configured") << '\n';
     out << "  Port 5391 (Sync): " << (st.has_sync_rule ? "Allowed" : "Not configured") << '\n';
+    return {};
+}
+
+Result<void> network_key_cmd(const config::Paths& paths, const NetworkKeyOptions& options,
+                             std::ostream& out) {
+    if (options.action == "generate") {
+        std::string target_path = options.path;
+        if (target_path.empty()) {
+            std::filesystem::path cfg_p(paths.config_file);
+            auto parent = cfg_p.parent_path();
+            if (parent.empty()) parent = ".";
+            target_path = (parent / "ldns.key").string();
+        }
+
+        std::filesystem::path p(target_path);
+        if (p.has_parent_path()) {
+            std::error_code ec;
+            std::filesystem::create_directories(p.parent_path(), ec);
+        }
+
+        auto rand_bytes = crypto::random_bytes_32();
+        std::string hex_key = ldns::to_hex(std::span<const std::uint8_t>(rand_bytes)) + "\n";
+
+        std::ofstream f(target_path, std::ios::binary);
+        if (!f) {
+            return Error{1, "failed to create key file: " + target_path};
+        }
+        f.write(hex_key.data(), static_cast<std::streamsize>(hex_key.size()));
+        f.close();
+
+#ifndef _WIN32
+        ::chmod(target_path.c_str(), S_IRUSR | S_IWUSR);
+#endif
+
+        if (options.json) {
+            json j;
+            j["action"] = "generate";
+            j["path"] = target_path;
+            j["status"] = "ok";
+            out << j.dump(2) << '\n';
+        } else {
+            out << "Generated 256-bit network key at: " << target_path << '\n';
+            out << "To activate this key, run:\n  ldns network key set " << target_path << '\n';
+        }
+        return {};
+    }
+
+    if (options.action == "set") {
+        if (options.path.empty()) {
+            return Error{kExitUsage, "missing required key file path"};
+        }
+
+        std::error_code ec;
+        if (!std::filesystem::is_regular_file(options.path, ec)) {
+            return Error{1, "key file does not exist or is not a regular file: " + options.path};
+        }
+
+        // Read or create config file
+        std::string config_content;
+        std::filesystem::path cfg_p(paths.config_file);
+        if (std::filesystem::is_regular_file(cfg_p, ec)) {
+            std::ifstream in(paths.config_file);
+            std::stringstream buffer;
+            buffer << in.rdbuf();
+            config_content = buffer.str();
+        }
+
+        // Clean path with forward slashes for toml
+        std::string clean_path = options.path;
+        for (auto& c : clean_path) {
+            if (c == '\\') c = '/';
+        }
+
+        // Check if key_file = exists in config_content
+        const std::string key_prefix = "key_file";
+        auto pos = config_content.find(key_prefix);
+        if (pos != std::string::npos) {
+            auto line_end = config_content.find('\n', pos);
+            if (line_end == std::string::npos) line_end = config_content.size();
+            config_content.replace(pos, line_end - pos, "key_file = \"" + clean_path + "\"");
+        } else {
+            // Check for [network] table
+            auto net_pos = config_content.find("[network]");
+            if (net_pos != std::string::npos) {
+                auto next_nl = config_content.find('\n', net_pos);
+                if (next_nl == std::string::npos) next_nl = config_content.size();
+                config_content.insert(next_nl + 1, "key_file = \"" + clean_path + "\"\n");
+            } else {
+                if (!config_content.empty() && config_content.back() != '\n') {
+                    config_content += "\n";
+                }
+                config_content += "\n[network]\nkey_file = \"" + clean_path + "\"\n";
+            }
+        }
+
+        if (cfg_p.has_parent_path()) {
+            std::filesystem::create_directories(cfg_p.parent_path(), ec);
+        }
+
+        std::ofstream out_f(paths.config_file);
+        if (!out_f) {
+            return Error{1, "failed to update configuration file: " + paths.config_file};
+        }
+        out_f << config_content;
+        out_f.close();
+
+#ifndef _WIN32
+        ::chmod(paths.config_file.c_str(), S_IRUSR | S_IWUSR);
+#endif
+
+        if (options.json) {
+            json j;
+            j["action"] = "set";
+            j["path"] = clean_path;
+            j["config_file"] = paths.config_file;
+            j["status"] = "ok";
+            out << j.dump(2) << '\n';
+        } else {
+            out << "Updated network.key_file in " << paths.config_file << " -> " << clean_path << '\n';
+            out << "Restart the ldns daemon or service to apply changes.\n";
+        }
+        return {};
+    }
+
+    if (options.action == "clear") {
+        std::error_code ec;
+        std::filesystem::path cfg_p(paths.config_file);
+        if (std::filesystem::is_regular_file(cfg_p, ec)) {
+            std::ifstream in(paths.config_file);
+            std::stringstream buffer;
+            buffer << in.rdbuf();
+            std::string content = buffer.str();
+            in.close();
+
+            auto pos = content.find("key_file");
+            if (pos != std::string::npos) {
+                auto line_end = content.find('\n', pos);
+                if (line_end == std::string::npos) line_end = content.size();
+                content.replace(pos, line_end - pos, "key_file = \"\"");
+
+                std::ofstream out_f(paths.config_file);
+                if (out_f) {
+                    out_f << content;
+                }
+            }
+        }
+
+        if (options.json) {
+            json j;
+            j["action"] = "clear";
+            j["status"] = "ok";
+            out << j.dump(2) << '\n';
+        } else {
+            out << "Cleared network.key_file in " << paths.config_file << '\n';
+            out << "Network is now unencrypted. Restart the ldns daemon or service to apply changes.\n";
+        }
+        return {};
+    }
+
+    // Default: status
+    std::string key_file;
+    bool key_file_found = false;
+    std::error_code ec;
+    std::filesystem::path cfg_p(paths.config_file);
+    if (std::filesystem::is_regular_file(cfg_p, ec)) {
+        std::ifstream in(paths.config_file);
+        std::string line;
+        while (std::getline(in, line)) {
+            auto pos = line.find("key_file");
+            if (pos != std::string::npos) {
+                auto eq = line.find('=', pos);
+                if (eq != std::string::npos) {
+                    auto q1 = line.find('"', eq);
+                    auto q2 = line.rfind('"');
+                    if (q1 != std::string::npos && q2 != std::string::npos && q2 > q1) {
+                        key_file = line.substr(q1 + 1, q2 - q1 - 1);
+                    }
+                }
+            }
+        }
+    }
+
+    if (!key_file.empty()) {
+        key_file_found = std::filesystem::is_regular_file(key_file, ec);
+    }
+
+    if (options.json) {
+        json j;
+        j["key_file"] = key_file;
+        j["configured"] = !key_file.empty();
+        j["found"] = key_file_found;
+        out << j.dump(2) << '\n';
+        return {};
+    }
+
+    out << "PSK Network Key Status:\n";
+    if (key_file.empty()) {
+        out << "  Configured: No (Network is open / unencrypted)\n";
+        out << "  Recommendation: Run 'ldns network key generate' and 'ldns network key set <path>'\n";
+    } else {
+        out << "  Key File: " << key_file << '\n';
+        out << "  File Exists: " << (key_file_found ? "Yes (Protected)" : "No (Warning: file missing!)") << '\n';
+    }
     return {};
 }
 

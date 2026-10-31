@@ -24,6 +24,7 @@ struct DiscoveryConfig {
     std::uint16_t dns_port{53};
     std::string multicast_group{kDiscoveryMulticastIpv4};
     bool enable_broadcast{true};
+    std::optional<std::array<std::uint8_t, 32>> k_beacon{std::nullopt};
 };
 
 struct DiscoveredPeer {

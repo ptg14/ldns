@@ -131,8 +131,13 @@ struct ResolveResponseMessage {
     std::vector<ResolveAnswer> answers;
 };
 
+struct AuthMessage {
+    std::array<std::uint8_t, 32> mac{};
+};
+
 enum class MessageType {
     Hello,
+    Auth,
     Ping,
     Pong,
     Peers,
@@ -151,6 +156,7 @@ struct ParsedMessage {
     MessageType type{MessageType::Unknown};
     std::string type_name;
     std::optional<HelloMessage> hello;
+    std::optional<AuthMessage> auth;
     std::optional<PeersMessage> peers;
     std::optional<ErrorMessage> error;
     std::optional<SyncReqMessage> sync_req;
@@ -166,6 +172,7 @@ Result<std::vector<std::uint8_t>> frame_payload(std::span<const std::uint8_t> pa
 
 // Message encoders
 Result<std::vector<std::uint8_t>> encode_hello_frame(const HelloMessage& msg);
+Result<std::vector<std::uint8_t>> encode_auth_frame(const AuthMessage& msg);
 Result<std::vector<std::uint8_t>> encode_ping_frame();
 Result<std::vector<std::uint8_t>> encode_pong_frame();
 Result<std::vector<std::uint8_t>> encode_bye_frame();

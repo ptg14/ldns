@@ -128,7 +128,11 @@ void DiscoveryService::send_beacon_now(bool is_bye) {
             std::chrono::system_clock::now().time_since_epoch())
             .count());
 
-    auto enc = encode_beacon(b);
+    std::span<const std::uint8_t> k_b;
+    if (config_.k_beacon) {
+        k_b = *config_.k_beacon;
+    }
+    auto enc = encode_beacon(b, k_b);
     if (!enc) return;
 
     const auto& packet = enc.value();
@@ -228,7 +232,12 @@ void DiscoveryService::handle_receive(const asio::error_code& ec, std::size_t by
     if (!running_ || ec == asio::error::operation_aborted) return;
 
     if (!ec && bytes_transferred > 0) {
-        auto dec = decode_beacon(std::span<const std::uint8_t>(recv_buffer_.data(), bytes_transferred));
+        std::span<const std::uint8_t> k_b;
+        if (config_.k_beacon) {
+            k_b = *config_.k_beacon;
+        }
+        auto dec = decode_beacon(
+            std::span<const std::uint8_t>(recv_buffer_.data(), bytes_transferred), k_b);
         if (dec) {
             const auto& b = dec.value();
             // Drop packets from ourselves (protocol §3.4)

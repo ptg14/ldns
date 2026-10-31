@@ -33,6 +33,7 @@ add_executable(ldns_tests
     test_peer_e2e.cpp
     test_ipc.cpp
     test_os.cpp
+    test_crypto.cpp
 )
 target_link_libraries(ldns_tests PRIVATE ldns_core doctest::doctest)
 ldns_set_warnings(ldns_tests)

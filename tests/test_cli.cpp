@@ -5,6 +5,7 @@
 #include "core/runtime/runtime.hpp"
 
 #include <filesystem>
+#include <fstream>
 #include <nlohmann/json.hpp>
 
 using namespace ldns;
@@ -435,4 +436,78 @@ TEST_CASE("CLI conflicts and info commands") {
     REQUIRE(cj2.size() == 1);
     CHECK(cj2[0]["name"] == "conflict.lan");
     CHECK(cj2[0]["type"] == "A");
+}
+
+TEST_CASE("CLI network key generate, set, status, clear") {
+    TempDir dir;
+    config::Paths paths;
+    paths.config_file = (dir.path / "config.toml").string();
+    paths.data_file = (dir.path / "ldns.db").string();
+
+    std::ostringstream ss;
+
+    // 1. Initial status: not configured
+    cli::NetworkKeyOptions status_opt;
+    status_opt.action = "status";
+    status_opt.json = true;
+    REQUIRE(cli::network_key_cmd(paths, status_opt, ss).has_value());
+    auto j1 = nlohmann::json::parse(ss.str(), nullptr, false);
+    REQUIRE_FALSE(j1.is_discarded());
+    CHECK(j1["configured"] == false);
+    CHECK(j1["found"] == false);
+
+    // 2. Generate key
+    ss.str("");
+    std::string key_path = (dir.path / "test.key").string();
+    cli::NetworkKeyOptions gen_opt;
+    gen_opt.action = "generate";
+    gen_opt.path = key_path;
+    gen_opt.json = true;
+    REQUIRE(cli::network_key_cmd(paths, gen_opt, ss).has_value());
+    auto j_gen = nlohmann::json::parse(ss.str(), nullptr, false);
+    REQUIRE_FALSE(j_gen.is_discarded());
+    CHECK(j_gen["status"] == "ok");
+    CHECK(std::filesystem::exists(key_path));
+
+    // Verify key file has 64 hex characters + newline
+    std::ifstream kf(key_path);
+    std::string hex_content;
+    std::getline(kf, hex_content);
+    CHECK(hex_content.size() == 64);
+
+    // 3. Set key in config
+    ss.str("");
+    cli::NetworkKeyOptions set_opt;
+    set_opt.action = "set";
+    set_opt.path = key_path;
+    set_opt.json = true;
+    REQUIRE(cli::network_key_cmd(paths, set_opt, ss).has_value());
+    auto j_set = nlohmann::json::parse(ss.str(), nullptr, false);
+    REQUIRE_FALSE(j_set.is_discarded());
+    CHECK(j_set["status"] == "ok");
+
+    // 4. Status now reports configured and found
+    ss.str("");
+    REQUIRE(cli::network_key_cmd(paths, status_opt, ss).has_value());
+    auto j2 = nlohmann::json::parse(ss.str(), nullptr, false);
+    REQUIRE_FALSE(j2.is_discarded());
+    CHECK(j2["configured"] == true);
+    CHECK(j2["found"] == true);
+
+    // 5. Clear key
+    ss.str("");
+    cli::NetworkKeyOptions clear_opt;
+    clear_opt.action = "clear";
+    clear_opt.json = true;
+    REQUIRE(cli::network_key_cmd(paths, clear_opt, ss).has_value());
+    auto j_clear = nlohmann::json::parse(ss.str(), nullptr, false);
+    REQUIRE_FALSE(j_clear.is_discarded());
+    CHECK(j_clear["status"] == "ok");
+
+    // 6. Status after clear
+    ss.str("");
+    REQUIRE(cli::network_key_cmd(paths, status_opt, ss).has_value());
+    auto j3 = nlohmann::json::parse(ss.str(), nullptr, false);
+    REQUIRE_FALSE(j3.is_discarded());
+    CHECK(j3["configured"] == false);
 }

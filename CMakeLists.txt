@@ -29,7 +29,7 @@ option(LDNS_WERROR "Treat compiler warnings as errors" ON)
 # ---------------------------------------------------------------------------
 function(ldns_set_warnings target)
     if(MSVC)
-        target_compile_options(${target} PRIVATE /W4 /permissive- /utf-8 /Zc:__cplusplus)
+        target_compile_options(${target} PRIVATE /W4 /permissive- /utf-8 /Zc:__cplusplus /FS)
         if(LDNS_WERROR)
             target_compile_options(${target} PRIVATE /WX)
         endif()

@@ -155,4 +155,14 @@ struct FirewallOptions {
 Result<void> firewall_cmd(const FirewallOptions& options,
                           std::ostream& out = std::cout);
 
+// --- Milestone 9 Security & PSK commands ---
+
+struct NetworkKeyOptions {
+    std::string action; // "generate" | "set" | "clear" | "status"
+    std::string path;   // path to key file (for generate or set)
+    bool json{false};
+};
+Result<void> network_key_cmd(const config::Paths& paths, const NetworkKeyOptions& options,
+                             std::ostream& out = std::cout);
+
 }  // namespace ldns::cli

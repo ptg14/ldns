@@ -154,6 +154,18 @@ Result<std::unique_ptr<CoreApi>> open_api(const GlobalOptions& global) {
 int run_command(const std::string& command, const GlobalOptions& global,
                 const CommandOptions& options, const std::string& list_type,
                 const std::string& peer_subaction = "") {
+    if (command == "network") {
+        config::Paths paths;
+        (void)load_config(global, paths);
+        cli::NetworkKeyOptions opt;
+        opt.action = peer_subaction;
+        opt.path = options.file;
+        opt.json = options.json;
+        auto result = cli::network_key_cmd(paths, opt);
+        if (!result) return fail(result.error());
+        return cli::kExitOk;
+    }
+
     auto api = open_api(global);
     if (!api) return fail(api.error());
     CoreApi& core = *api.value();
@@ -453,6 +465,21 @@ int main(int argc, char** argv) {
     auto* fw_status = firewall_cmd->add_subcommand("status", "show Ldns firewall rule status");
     fw_status->add_flag("--json", options.json, "machine-readable output");
 
+    auto* network_cmd = app.add_subcommand("network", "manage network configuration and PSK");
+    network_cmd->require_subcommand(1, 1);
+    auto* net_key = network_cmd->add_subcommand("key", "manage network PSK key (generate, set, clear, status)");
+    net_key->require_subcommand(1, 1);
+    auto* net_key_gen = net_key->add_subcommand("generate", "generate a new random 256-bit PSK file");
+    net_key_gen->add_option("path", options.file, "path to write key file");
+    net_key_gen->add_flag("--json", options.json, "machine-readable output");
+    auto* net_key_set = net_key->add_subcommand("set", "set network.key_file path in config.toml");
+    net_key_set->add_option("path", options.file, "path to existing key file")->required();
+    net_key_set->add_flag("--json", options.json, "machine-readable output");
+    auto* net_key_clear = net_key->add_subcommand("clear", "clear network.key_file in config.toml");
+    net_key_clear->add_flag("--json", options.json, "machine-readable output");
+    auto* net_key_status = net_key->add_subcommand("status", "check PSK status");
+    net_key_status->add_flag("--json", options.json, "machine-readable output");
+
     try {
         app.parse(argc, argv);
     } catch (const CLI::ParseError& e) {
@@ -489,6 +516,11 @@ int main(int argc, char** argv) {
         peer_subaction = service_cmd->get_subcommands().front()->get_name();
     } else if (command == "firewall" && !firewall_cmd->get_subcommands().empty()) {
         peer_subaction = firewall_cmd->get_subcommands().front()->get_name();
+    } else if (command == "network" && !network_cmd->get_subcommands().empty()) {
+        auto* sub = network_cmd->get_subcommands().front();
+        if (!sub->get_subcommands().empty()) {
+            peer_subaction = sub->get_subcommands().front()->get_name();
+        }
     }
 
     if (command == "daemon") return run_daemon(global, options.foreground);

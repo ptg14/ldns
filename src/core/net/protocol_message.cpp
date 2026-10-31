@@ -141,6 +141,16 @@ Result<std::vector<std::uint8_t>> encode_hello_frame(const HelloMessage& msg) {
     return frame_payload(payload);
 }
 
+Result<std::vector<std::uint8_t>> encode_auth_frame(const AuthMessage& msg) {
+    json j;
+    j["t"] = "AUTH";
+    std::vector<std::uint8_t> mac_bytes(msg.mac.begin(), msg.mac.end());
+    j["mac"] = json::binary(std::move(mac_bytes));
+    std::vector<std::uint8_t> payload;
+    json::to_msgpack(j, payload);
+    return frame_payload(payload);
+}
+
 Result<std::vector<std::uint8_t>> encode_ping_frame() {
     json j;
     j["t"] = "PING";
@@ -384,6 +394,16 @@ Result<ParsedMessage> parse_payload(std::span<const std::uint8_t> payload) {
         if (j.contains("psk") && j["psk"].is_boolean()) h.psk = j["psk"].get<bool>();
 
         parsed.hello = std::move(h);
+    } else if (parsed.type_name == "AUTH") {
+        parsed.type = MessageType::Auth;
+        AuthMessage a;
+        if (j.contains("mac") && j["mac"].is_binary() && j["mac"].get_binary().size() == 32) {
+            const auto& mac_bin = j["mac"].get_binary();
+            std::copy_n(mac_bin.begin(), 32, a.mac.begin());
+            parsed.auth = std::move(a);
+        } else {
+            return Error{823, "invalid or missing AUTH mac"};
+        }
     } else if (parsed.type_name == "PING") {
         parsed.type = MessageType::Ping;
     } else if (parsed.type_name == "PONG") {

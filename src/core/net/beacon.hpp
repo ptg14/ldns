@@ -30,9 +30,13 @@ struct Beacon {
 };
 
 // Encodes a Beacon struct into wire format according to protocol.md §3.
-Result<std::vector<std::uint8_t>> encode_beacon(const Beacon& beacon);
+// If k_beacon is provided, flags has bit 0 set and 16-byte HMAC-SHA256 MAC is appended.
+Result<std::vector<std::uint8_t>> encode_beacon(const Beacon& beacon,
+                                                std::span<const std::uint8_t> k_beacon = {});
 
 // Decodes a raw datagram into a Beacon struct according to protocol.md §3.
-Result<Beacon> decode_beacon(std::span<const std::uint8_t> packet);
+// If k_beacon is provided, verifies the 16-byte MAC.
+Result<Beacon> decode_beacon(std::span<const std::uint8_t> packet,
+                             std::span<const std::uint8_t> k_beacon = {});
 
 }  // namespace ldns::net

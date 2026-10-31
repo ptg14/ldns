@@ -625,3 +625,40 @@ Nếu user muốn giữ IP ảo (vd VPN), dùng `network.self_ip = "10.x.x.x"` �
   - Linux WSL Clang AddressSanitizer + UndefinedBehaviorSanitizer: 210/210 test cases PASS (100%), 0 warnings, không rò rỉ bộ nhớ hay lỗi sanitizers.
   - Kiểm thử trực tiếp CLI: `ldns doctor`, `ldns firewall status --json`, `ldns service status --json`, `ldns system status --json` chạy mượt mà và chính xác trên cả Windows lẫn Linux WSL.
 - Tiếp theo: Báo cáo kết quả hoàn thành Milestone 8 và đề xuất commit message cho người dùng.
+
+## 2026-10-31 — Phiên làm việc: Hoàn thành Milestone 9 (Bảo mật & Độ cứng: PSK, HKDF, HMAC Beacon, Handshake AUTH, AEAD Session, Rate Limiting, CLI Network Key)
+- Mục tiêu: Hoàn thành toàn diện Milestone 9 (M9) theo `docs/PLAN.md` §M9, `docs/SPEC.md` §14, §15, và `docs/protocol.md` §3.1, §4, §5:
+  - Khởi tạo thư viện mật mã học `crypto` (libsodium CSPRNG, HKDF-SHA256, HMAC-SHA256, XChaCha20-Poly1305 AEAD).
+  - Ký và xác thực MAC cho Beacon qua UDP discovery (`K_beacon`).
+  - Giao thức bắt tay bảo mật có xác thực AUTH (`HELLO(I)` -> `HELLO(R)` -> `AUTH(I)` -> `AUTH(R)` -> `ESTABLISHED`), chống tấn công phát lại và người đứng giữa.
+  - Mã hóa toàn bộ các frame TCP session bằng XChaCha20-Poly1305 với bộ đếm hướng (directional counters) và AD là 4-byte độ dài.
+  - Quản lý khóa mạng qua CLI: `ldns network key generate|set|clear|status`, đặt quyền tệp an toàn (0600 trên POSIX).
+  - Cảnh báo "chưa đặt khóa mạng" trong `ldns status`.
+  - Giới hạn phòng thủ: tối đa 64 peer, giới hạn tốc độ 200 op/s UPDATE mỗi peer, giới hạn kích thước frame 4 MiB, giới hạn 1000 op mỗi chunk.
+- Đã thực hiện:
+  - Phase 9.1 (Crypto Primitives):
+    - `src/core/net/crypto.{hpp,cpp}`: Triển khai các hàm mật mã chuẩn: `sha256`, `hmac_sha256`, `hkdf_extract`, `hkdf_expand`, `derive_root_keys`, `derive_session_keys`, `make_nonce`, `aead_encrypt`, `aead_decrypt`, `compute_beacon_mac`, `verify_beacon_mac`, `compute_auth_mac`, `verify_auth_mac`.
+    - `tests/test_crypto.cpp`: 6 test cases kiểm thử độc lập các hàm mật mã học, mã hóa/giải mã, chống tamper và replay.
+  - Phase 9.2 (Beacon HMAC Signing & Verification):
+    - `src/core/net/beacon.{hpp,cpp}`: Hỗ trợ cờ `kFlagHasMac = 0x01` và trường 16-byte HMAC-SHA256 MAC.
+    - `src/core/net/discovery.{hpp,cpp}`: Tích hợp `k_beacon` vào `DiscoveryConfig`, tự động ký beacon khi phát đi và xác thực MAC khi nhận về (loại bỏ âm thầm nếu sai khóa).
+  - Phase 9.3 (Session Handshake AUTH & AEAD Frame Encryption):
+    - `src/core/net/protocol_message.{hpp,cpp}`: Thêm kiểu `AuthMessage`, parser và encoder `encode_auth_frame`.
+    - `src/core/net/session.{hpp,cpp}`:
+      - Quản lý trạng thái AEAD, directional counters (`send_counter_`, `recv_counter_`), `raw_my_hello_`, `raw_peer_hello_`, transcript hash `TH`.
+      - Trao đổi xác thực AUTH có mã hóa trước khi chuyển sang `Established`.
+      - Cơ chế gửi frame phân tách: `send_unencrypted_frame` cho `HELLO` và `send_frame` có mã hóa AEAD cho mọi frame tiếp theo.
+      - Giới hạn tốc độ UPDATE: ngắt kết nối peer gửi > 200 op/s.
+      - Giới hạn chunk: từ chối snapshot chunk > 1000 op.
+  - Phase 9.4 (CoreApi, Runtime, PeerManager & CLI Integration):
+    - `src/core/core_api.{hpp,cpp}`: Nạp khóa PSK từ `network.key_file` (hỗ trợ cả chuỗi hex 64 ký tự lẫn nhị phân >= 16 bytes), dẫn xuất bộ khóa gốc `K_root`, `K_beacon`, `K_auth`.
+    - `src/core/runtime/runtime.cpp`: Chuyển giao khóa bảo mật tới `PeerManagerConfig` và `DiscoveryConfig`.
+    - `src/core/cli/commands.{hpp,cpp}` & `src/main.cpp`: Bổ sung lệnh `ldns network key generate [path]`, `set <path>`, `clear`, `status [--json]` với quyền tệp 0600.
+  - Phase 9.5 (Kiểm thử M9 & Kiểm tra Sanitizers):
+    - `tests/test_session.cpp`: Thêm các kịch bản kiểm thử bắt tay PSK thành công và trao đổi frame mã hóa, từ chối mismatch PSK, từ chối lệch khóa, và tự động ngắt peer vi phạm rate limit 200 op/s.
+    - `tests/test_cli.cpp`: Thêm kịch bản kiểm thử toàn diện cho lệnh `network key`.
+- Kết quả kiểm chứng:
+  - Windows MSVC Debug (`/WX`): 221/221 test cases PASS (100%), 2834 assertions.
+  - Linux WSL GCC 13 Debug (`-Werror`): 221/221 test cases PASS (100%).
+  - Linux WSL Clang AddressSanitizer + UndefinedBehaviorSanitizer: 221/221 test cases PASS (100%), sạch hoàn toàn bộ nhớ và sanitizers.
+- Tiếp theo: Báo cáo kết quả Milestone 9 và gợi ý commit message cho người dùng.
