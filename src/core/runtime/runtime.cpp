@@ -183,6 +183,8 @@ Result<void> Runtime::start() {
     pm_cfg.my_ips = self_ips;
     pm_cfg.my_epoch = api_->status().epoch;
     pm_cfg.my_seq = api_->status().seq;
+    pm_cfg.k_root = api_->k_root();
+    pm_cfg.k_auth = api_->k_auth();
 
     peer_manager_ = net::PeerManager::create(
         io_, std::move(pm_cfg),
@@ -259,6 +261,7 @@ Result<void> Runtime::start() {
     disc_cfg.discovery_port = api_->config().network.discovery_port;
     disc_cfg.sync_port = peer_manager_ ? peer_manager_->bound_port() : api_->config().network.sync_port;
     disc_cfg.dns_port = kDnsPort;
+    disc_cfg.k_beacon = api_->k_beacon();
 
     discovery_ = std::make_shared<net::DiscoveryService>(
         io_, std::move(disc_cfg),

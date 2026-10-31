@@ -511,7 +511,8 @@ void Config::apply_environment() {
 Result<void> Config::validate() const {
     if (network.name.empty()) return Error{510, "network.name must not be empty"};
     if (network.name.size() > 63) return Error{510, "network.name is longer than 63 bytes"};
-    for (const unsigned char c : network.name) {
+    for (const char ch : network.name) {
+        const auto c = static_cast<unsigned char>(ch);
         if (std::isspace(c) != 0 || c < 0x20) {
             return Error{510, "network.name contains whitespace"};
         }

@@ -7,7 +7,9 @@
 #include <utility>
 
 #include "core/domain/import_export.hpp"
+#include "core/net/crypto.hpp"
 #include "core/net/system_dns.hpp"
+#include "core/util/id.hpp"
 #include "core/util/logger.hpp"
 
 namespace ldns {
@@ -57,7 +59,50 @@ CoreApi::CoreApi(Options options, Store store)
     if (psk_configured_) {
         std::error_code ec;
         psk_key_file_found_ = std::filesystem::is_regular_file(key_file, ec);
-        if (!psk_key_file_found_) {
+        if (psk_key_file_found_) {
+            std::ifstream file(key_file, std::ios::binary);
+            if (file) {
+                std::vector<std::uint8_t> bytes((std::istreambuf_iterator<char>(file)),
+                                                std::istreambuf_iterator<char>());
+                while (!bytes.empty() && (bytes.back() == '\r' || bytes.back() == '\n' || bytes.back() == ' ')) {
+                    bytes.pop_back();
+                }
+
+                std::vector<std::uint8_t> psk_data;
+                bool is_hex = (bytes.size() == 64);
+                if (is_hex) {
+                    for (auto b : bytes) {
+                        if (!std::isxdigit(static_cast<unsigned char>(b))) {
+                            is_hex = false;
+                            break;
+                        }
+                    }
+                }
+
+                if (is_hex) {
+                    std::string hex_str(bytes.begin(), bytes.end());
+                    NodeId psk_arr{};
+                    if (from_hex(hex_str, psk_arr)) {
+                        psk_data.assign(psk_arr.begin(), psk_arr.end());
+                    }
+                } else if (bytes.size() >= 16) {
+                    psk_data = std::move(bytes);
+                }
+
+                if (psk_data.size() >= 16) {
+                    auto keys = crypto::derive_root_keys(psk_data);
+                    k_root_ = keys.root;
+                    k_beacon_ = keys.beacon;
+                    k_auth_ = keys.auth;
+                    logger()->info("network PSK loaded successfully from {}", key_file);
+                } else {
+                    logger()->warn("network.key_file {} contains fewer than 16 bytes; PSK disabled", key_file);
+                    psk_key_file_found_ = false;
+                }
+            } else {
+                psk_key_file_found_ = false;
+            }
+        } else {
             logger()->warn("network.key_file is set but {} is not a readable file; "
                            "the network is currently unprotected",
                            key_file);

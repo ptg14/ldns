@@ -1,8 +1,14 @@
 #include "core/net/session.hpp"
 
+#include "core/net/crypto.hpp"
 #include "core/util/logger.hpp"
 
 namespace ldns::net {
+
+namespace {
+constexpr std::size_t kMaxUpdateOpsPerSecond = 200;
+constexpr std::uint64_t kMaxCounter = (1ULL << 48);
+}  // namespace
 
 std::shared_ptr<Session> Session::create_inbound(
     asio::ip::tcp::socket socket, SessionOptions options,
@@ -102,13 +108,36 @@ void Session::do_handshake_send_hello() {
     h.sync_port = options_.sync_port;
     h.dns_port = options_.dns_port;
     h.caps = {"relay", "snapshot-chunk"};
-    h.nonce = {0};
-    h.psk = false;
+    if (options_.k_root) {
+        h.nonce = crypto::random_bytes_32();
+        h.psk = true;
+    } else {
+        h.nonce = {0};
+        h.psk = false;
+    }
 
     auto frame = encode_hello_frame(h);
     if (frame) {
-        send_frame(std::move(frame.value()));
+        if (frame.value().size() >= 4) {
+            raw_my_hello_.assign(frame.value().begin() + 4, frame.value().end());
+        }
+        send_unencrypted_frame(std::move(frame.value()));
     }
+}
+
+void Session::send_unencrypted_frame(std::vector<std::uint8_t> framed_bytes) {
+    if (closed_ || !socket_.is_open()) return;
+
+    auto self = shared_from_this();
+    asio::post(socket_.get_executor(), [self, bytes = std::move(framed_bytes)]() mutable {
+        if (self->closed_ || !self->socket_.is_open()) return;
+
+        const bool write_in_progress = !self->write_queue_.empty();
+        self->write_queue_.push_back(std::move(bytes));
+        if (!write_in_progress) {
+            self->do_write();
+        }
+    });
 }
 
 void Session::close(std::string_view reason) {
@@ -137,6 +166,33 @@ void Session::send_frame(std::vector<std::uint8_t> framed_bytes) {
 
     auto self = shared_from_this();
     asio::post(socket_.get_executor(), [self, bytes = std::move(framed_bytes)]() mutable {
+        if (self->closed_ || !self->socket_.is_open()) return;
+
+        if (self->aead_active_) {
+            if (bytes.size() < 4) return;
+            if (self->send_counter_ >= kMaxCounter) {
+                self->close("send counter overflow");
+                return;
+            }
+
+            std::span<const std::uint8_t> plaintext(bytes.data() + 4, bytes.size() - 4);
+            const std::uint32_t c_len = static_cast<std::uint32_t>(plaintext.size() + 16);
+            std::array<std::uint8_t, 4> ad = {
+                static_cast<std::uint8_t>((c_len >> 24) & 0xFF),
+                static_cast<std::uint8_t>((c_len >> 16) & 0xFF),
+                static_cast<std::uint8_t>((c_len >> 8) & 0xFF),
+                static_cast<std::uint8_t>(c_len & 0xFF)
+            };
+
+            auto enc = crypto::aead_encrypt(self->send_key_, self->send_counter_++, ad, plaintext);
+
+            std::vector<std::uint8_t> out;
+            out.reserve(4 + enc.size());
+            out.insert(out.end(), ad.begin(), ad.end());
+            out.insert(out.end(), enc.begin(), enc.end());
+            bytes = std::move(out);
+        }
+
         const bool write_in_progress = !self->write_queue_.empty();
         self->write_queue_.push_back(std::move(bytes));
         if (!write_in_progress) {
@@ -180,7 +236,58 @@ void Session::send_bye() {
 
 void Session::send_error(ProtocolErrorCode code, std::string msg) {
     auto frame = encode_error_frame(ErrorMessage{code, std::move(msg)});
-    if (frame) send_frame(std::move(frame.value()));
+    if (frame) {
+        if (!aead_active_) {
+            send_unencrypted_frame(std::move(frame.value()));
+        } else {
+            send_frame(std::move(frame.value()));
+        }
+    }
+}
+
+void Session::send_error_and_close(ProtocolErrorCode code, std::string msg) {
+    if (closed_ || !socket_.is_open()) {
+        close(msg);
+        return;
+    }
+    auto frame = encode_error_frame(ErrorMessage{code, msg});
+    if (!frame) {
+        close(msg);
+        return;
+    }
+    auto self = shared_from_this();
+    asio::post(socket_.get_executor(), [self, frame_bytes = std::move(frame.value()), reason = std::move(msg)]() mutable {
+        if (self->closed_ || !self->socket_.is_open()) return;
+
+        std::vector<std::uint8_t> wire_bytes;
+        if (!self->aead_active_) {
+            wire_bytes = std::move(frame_bytes);
+        } else {
+            if (frame_bytes.size() < 4) {
+                self->close(reason);
+                return;
+            }
+            std::span<const std::uint8_t> payload(frame_bytes.data() + 4, frame_bytes.size() - 4);
+            std::array<std::uint8_t, 4> ad = {
+                frame_bytes[0], frame_bytes[1], frame_bytes[2], frame_bytes[3]
+            };
+            auto enc = crypto::aead_encrypt(self->send_key_, self->send_counter_++, ad, payload);
+            const std::uint32_t enc_len = static_cast<std::uint32_t>(enc.size());
+            ad[0] = static_cast<std::uint8_t>((enc_len >> 24) & 0xFF);
+            ad[1] = static_cast<std::uint8_t>((enc_len >> 16) & 0xFF);
+            ad[2] = static_cast<std::uint8_t>((enc_len >> 8) & 0xFF);
+            ad[3] = static_cast<std::uint8_t>(enc_len & 0xFF);
+            wire_bytes.reserve(4 + enc.size());
+            wire_bytes.insert(wire_bytes.end(), ad.begin(), ad.end());
+            wire_bytes.insert(wire_bytes.end(), enc.begin(), enc.end());
+        }
+
+        auto buf = std::make_shared<std::vector<std::uint8_t>>(std::move(wire_bytes));
+        asio::async_write(self->socket_, asio::buffer(*buf),
+                          [self, buf, reason = std::move(reason)](const asio::error_code&, std::size_t) {
+                              self->close(reason);
+                          });
+    });
 }
 
 void Session::send_peers(const std::vector<PeerItem>& peers) {
@@ -215,8 +322,7 @@ void Session::handle_read_length(const asio::error_code& ec, std::size_t bytes) 
                               static_cast<std::uint32_t>(length_buffer_[3]);
 
     if (len > kMaxFrameSize) {
-        send_error(ProtocolErrorCode::Malformed, "frame size exceeds 4 MiB limit");
-        close("frame length exceeds 4 MiB limit");
+        send_error_and_close(ProtocolErrorCode::Malformed, "frame size exceeds 4 MiB limit");
         return;
     }
 
@@ -237,65 +343,163 @@ void Session::handle_read_payload(const asio::error_code& ec, std::size_t bytes)
 
     reset_activity_timer();
 
-    auto parsed = parse_payload(std::span<const std::uint8_t>(payload_buffer_.data(), bytes));
+    std::span<const std::uint8_t> payload_span(payload_buffer_.data(), bytes);
+    std::vector<std::uint8_t> decrypted_payload;
+
+    if (aead_active_) {
+        if (recv_counter_ >= kMaxCounter) {
+            close("receive counter overflow");
+            return;
+        }
+
+        auto dec = crypto::aead_decrypt(
+            recv_key_, recv_counter_++, length_buffer_, payload_span);
+        if (!dec) {
+            send_error_and_close(ProtocolErrorCode::Auth, "decryption failed: " + dec.error().message);
+            return;
+        }
+        decrypted_payload = std::move(dec.value());
+        payload_span = decrypted_payload;
+    }
+
+    auto parsed = parse_payload(payload_span);
     if (!parsed) {
-        send_error(ProtocolErrorCode::Malformed, "failed to parse messagepack");
-        close("failed to parse messagepack: " + parsed.error().message);
+        send_error_and_close(ProtocolErrorCode::Malformed, "failed to parse messagepack: " + parsed.error().message);
         return;
     }
 
-    handle_incoming_message(parsed.value());
+    handle_incoming_message(parsed.value(), payload_span);
 
     if (!closed_) {
         start_read_length();
     }
 }
 
-void Session::handle_incoming_message(const ParsedMessage& msg) {
+void Session::handle_incoming_message(const ParsedMessage& msg, std::span<const std::uint8_t> raw_payload) {
     if (state_ == SessionState::Handshaking) {
-        if (msg.type != MessageType::Hello || !msg.hello) {
-            send_error(ProtocolErrorCode::Malformed, "expected HELLO during handshake");
-            close("expected HELLO during handshake");
+        if (!aead_active_) {
+            if (msg.type == MessageType::Error) {
+                close("peer sent error during handshake: " + (msg.error ? msg.error->msg : ""));
+                return;
+            }
+
+            if (msg.type != MessageType::Hello || !msg.hello) {
+                send_error_and_close(ProtocolErrorCode::Malformed, "expected HELLO during handshake");
+                return;
+            }
+
+            const auto& h = msg.hello.value();
+
+            // 1. Check version major (protocol §5.2)
+            if (h.version[0] != 1) {
+                send_error_and_close(ProtocolErrorCode::Version, "unsupported version major");
+                return;
+            }
+
+            // 2. Check network hash (protocol §5.2)
+            if (h.net != options_.net_hash) {
+                send_error_and_close(ProtocolErrorCode::Network, "network mismatch");
+                return;
+            }
+
+            // 3. Check self connection (protocol §5.2)
+            if (h.node_id == options_.my_node_id) {
+                send_error_and_close(ProtocolErrorCode::Self, "connected to self");
+                return;
+            }
+
+            // 4. Check PSK flag (protocol §5.2)
+            const bool my_has_psk = options_.k_root.has_value();
+            if (h.psk != my_has_psk) {
+                send_error_and_close(ProtocolErrorCode::Auth, "psk configuration mismatch");
+                return;
+            }
+
+            peer_node_id_ = h.node_id;
+            peer_name_ = h.name;
+            peer_hello_ = h;
+            raw_peer_hello_.assign(raw_payload.begin(), raw_payload.end());
+
+            if (role_ == SessionRole::Initiator) {
+                if (my_has_psk) {
+                    if (!options_.k_auth) {
+                        close("missing k_auth for PSK session");
+                        return;
+                    }
+                    auto s_keys = crypto::derive_session_keys(*options_.k_root, raw_my_hello_, raw_peer_hello_);
+                    send_key_ = s_keys.k_i2r;
+                    recv_key_ = s_keys.k_r2i;
+                    th_ = s_keys.th;
+                    aead_active_ = true;
+                    send_counter_ = 0;
+                    recv_counter_ = 0;
+
+                    auto mac = crypto::compute_auth_mac(*options_.k_auth, 'I', th_);
+                    auto auth_frame = encode_auth_frame(AuthMessage{mac});
+                    if (auth_frame) {
+                        send_frame(std::move(auth_frame.value()));
+                    }
+                    return;
+                }
+            } else {
+                // Responder sends our HELLO back now (protocol §5.1)
+                do_handshake_send_hello();
+
+                if (my_has_psk) {
+                    if (!options_.k_auth) {
+                        close("missing k_auth for PSK session");
+                        return;
+                    }
+                    auto s_keys = crypto::derive_session_keys(*options_.k_root, raw_peer_hello_, raw_my_hello_);
+                    send_key_ = s_keys.k_r2i;
+                    recv_key_ = s_keys.k_i2r;
+                    th_ = s_keys.th;
+                    aead_active_ = true;
+                    send_counter_ = 0;
+                    recv_counter_ = 0;
+                    return;
+                }
+            }
+
+            handshake_timer_.cancel();
+            state_ = SessionState::Established;
+
+            start_heartbeat();
+
+            if (on_established_) {
+                on_established_(shared_from_this());
+            }
             return;
         }
 
-        const auto& h = msg.hello.value();
-
-        // 1. Check version major (protocol §5.2)
-        if (h.version[0] != 1) {
-            send_error(ProtocolErrorCode::Version, "unsupported version major");
-            close("version mismatch");
+        // aead_active_ is true: awaiting AUTH frame
+        if (msg.type == MessageType::Error) {
+            close("peer sent error during auth handshake: " + (msg.error ? msg.error->msg : ""));
             return;
         }
 
-        // 2. Check network hash (protocol §5.2)
-        if (h.net != options_.net_hash) {
-            send_error(ProtocolErrorCode::Network, "network mismatch");
-            close("network mismatch");
+        if (msg.type != MessageType::Auth || !msg.auth) {
+            send_error_and_close(ProtocolErrorCode::Auth, "expected AUTH frame");
             return;
         }
 
-        // 3. Check self connection (protocol §5.2)
-        if (h.node_id == options_.my_node_id) {
-            send_error(ProtocolErrorCode::Self, "connected to self");
-            close("connected to self");
-            return;
-        }
+        if (role_ == SessionRole::Initiator) {
+            if (!options_.k_auth || !crypto::verify_auth_mac(*options_.k_auth, 'R', th_, msg.auth->mac)) {
+                send_error_and_close(ProtocolErrorCode::Auth, "authentication failed: invalid responder AUTH mac");
+                return;
+            }
+        } else {
+            if (!options_.k_auth || !crypto::verify_auth_mac(*options_.k_auth, 'I', th_, msg.auth->mac)) {
+                send_error_and_close(ProtocolErrorCode::Auth, "authentication failed: invalid initiator AUTH mac");
+                return;
+            }
 
-        // 4. Check PSK flag (protocol §5.2)
-        if (h.psk != false) {
-            send_error(ProtocolErrorCode::Auth, "psk configuration mismatch");
-            close("psk mismatch");
-            return;
-        }
-
-        peer_node_id_ = h.node_id;
-        peer_name_ = h.name;
-        peer_hello_ = h;
-
-        // If responder, send our HELLO back now (protocol §5.1)
-        if (role_ == SessionRole::Responder) {
-            do_handshake_send_hello();
+            // Responder sends AUTH(R)
+            auto mac = crypto::compute_auth_mac(*options_.k_auth, 'R', th_);
+            auto auth_frame = encode_auth_frame(AuthMessage{mac});
+            if (auth_frame) {
+                send_frame(std::move(auth_frame.value()));
+            }
         }
 
         handshake_timer_.cancel();
@@ -310,6 +514,30 @@ void Session::handle_incoming_message(const ParsedMessage& msg) {
     }
 
     if (state_ == SessionState::Established) {
+        // Enforce rate limit on UPDATE operations (protocol §10 / SPEC §14: max 200 op/s)
+        if (msg.type == MessageType::Update && msg.update) {
+            const auto now = std::chrono::steady_clock::now();
+            if (now - update_rate_window_start_ >= std::chrono::seconds(1)) {
+                update_rate_window_start_ = now;
+                update_ops_in_window_ = 0;
+            }
+            update_ops_in_window_ += msg.update->ops.size();
+            if (update_ops_in_window_ > kMaxUpdateOpsPerSecond) {
+                send_error(ProtocolErrorCode::NotAllowed, "update rate limit exceeded (200 op/s)");
+                close("update rate limit exceeded");
+                return;
+            }
+        }
+
+        // Enforce snapshot chunk limit (protocol §6.3: <= 1000 ops per chunk)
+        if (msg.type == MessageType::SyncData && msg.sync_data) {
+            if (msg.sync_data->ops.size() > 1000) {
+                send_error(ProtocolErrorCode::Malformed, "snapshot chunk exceeds 1000 ops limit");
+                close("snapshot chunk exceeds 1000 ops limit");
+                return;
+            }
+        }
+
         switch (msg.type) {
             case MessageType::Ping:
                 send_pong();

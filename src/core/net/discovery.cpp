@@ -128,10 +128,14 @@ void DiscoveryService::send_beacon_now(bool is_bye) {
             std::chrono::system_clock::now().time_since_epoch())
             .count());
 
-    auto enc = encode_beacon(b);
+    std::span<const std::uint8_t> k_b;
+    if (config_.k_beacon) {
+        k_b = *config_.k_beacon;
+    }
+    auto enc = encode_beacon(b, k_b);
     if (!enc) return;
 
-    const auto& packet = enc.value();
+    auto buf = std::make_shared<std::vector<std::uint8_t>>(std::move(enc.value()));
     last_beacon_time_ = std::chrono::steady_clock::now();
 
     // 1. Multicast endpoint
@@ -140,16 +144,16 @@ void DiscoveryService::send_beacon_now(bool is_bye) {
         auto mc_addr = asio::ip::make_address_v4(config_.multicast_group, mc_ec);
         if (!mc_ec) {
             asio::ip::udp::endpoint mc_ep(mc_addr, config_.discovery_port);
-            socket_.async_send_to(asio::buffer(packet), mc_ep,
-                                  [](const asio::error_code&, std::size_t) {});
+            socket_.async_send_to(asio::buffer(*buf), mc_ep,
+                                  [buf](const asio::error_code&, std::size_t) {});
         }
     }
 
     // 2. Broadcast endpoint (fallback per protocol §3.3)
     if (config_.enable_broadcast) {
         asio::ip::udp::endpoint bc_ep(asio::ip::address_v4::broadcast(), config_.discovery_port);
-        socket_.async_send_to(asio::buffer(packet), bc_ep,
-                              [](const asio::error_code&, std::size_t) {});
+        socket_.async_send_to(asio::buffer(*buf), bc_ep,
+                              [buf](const asio::error_code&, std::size_t) {});
     }
 }
 
@@ -228,7 +232,12 @@ void DiscoveryService::handle_receive(const asio::error_code& ec, std::size_t by
     if (!running_ || ec == asio::error::operation_aborted) return;
 
     if (!ec && bytes_transferred > 0) {
-        auto dec = decode_beacon(std::span<const std::uint8_t>(recv_buffer_.data(), bytes_transferred));
+        std::span<const std::uint8_t> k_b;
+        if (config_.k_beacon) {
+            k_b = *config_.k_beacon;
+        }
+        auto dec = decode_beacon(
+            std::span<const std::uint8_t>(recv_buffer_.data(), bytes_transferred), k_b);
         if (dec) {
             const auto& b = dec.value();
             // Drop packets from ourselves (protocol §3.4)

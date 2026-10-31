@@ -1,4 +1,5 @@
 #include "core/net/beacon.hpp"
+#include "core/net/crypto.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -12,7 +13,8 @@ constexpr std::array<std::uint8_t, 4> kMagic = {'L', 'D', 'B', '1'};
 
 }  // namespace
 
-Result<std::vector<std::uint8_t>> encode_beacon(const Beacon& beacon) {
+Result<std::vector<std::uint8_t>> encode_beacon(const Beacon& beacon,
+                                                std::span<const std::uint8_t> k_beacon) {
     json j;
     j["t"] = beacon.type;
     j["v"] = json::array({beacon.version[0], beacon.version[1]});
@@ -41,20 +43,31 @@ Result<std::vector<std::uint8_t>> encode_beacon(const Beacon& beacon) {
     std::vector<std::uint8_t> body;
     json::to_msgpack(j, body);
 
-    // protocol.md §3.1: "LDB1" (4B) + flags (1B) + body
-    if (5 + body.size() > kMaxBeaconDatagramSize) {
+    const bool has_mac = !k_beacon.empty();
+    const std::uint8_t flags = has_mac ? 0x01 : 0x00;
+    const std::size_t mac_size = has_mac ? 16 : 0;
+
+    // protocol.md §3.1: "LDB1" (4B) + flags (1B) + body + optional mac (16B)
+    if (5 + body.size() + mac_size > kMaxBeaconDatagramSize) {
         return Error{802, "beacon datagram exceeds 1200 bytes limit"};
     }
 
     std::vector<std::uint8_t> out;
-    out.reserve(5 + body.size());
+    out.reserve(5 + body.size() + mac_size);
     out.insert(out.end(), kMagic.begin(), kMagic.end());
-    out.push_back(0x00);  // flags: no MAC (PSK disabled in M4)
+    out.push_back(flags);
     out.insert(out.end(), body.begin(), body.end());
+
+    if (has_mac) {
+        auto mac = crypto::compute_beacon_mac(k_beacon, flags, body);
+        out.insert(out.end(), mac.begin(), mac.end());
+    }
+
     return out;
 }
 
-Result<Beacon> decode_beacon(std::span<const std::uint8_t> packet) {
+Result<Beacon> decode_beacon(std::span<const std::uint8_t> packet,
+                             std::span<const std::uint8_t> k_beacon) {
     if (packet.size() > kMaxBeaconDatagramSize) {
         return Error{803, "beacon datagram exceeds maximum size of 1200 bytes"};
     }
@@ -77,6 +90,17 @@ Result<Beacon> decode_beacon(std::span<const std::uint8_t> packet) {
     const std::size_t body_size = packet.size() - 5 - mac_size;
     auto body_span = packet.subspan(5, body_size);
 
+    if (!k_beacon.empty()) {
+        if (!has_mac) {
+            return Error{808, "beacon missing required MAC on PSK network"};
+        }
+        std::array<std::uint8_t, 16> mac{};
+        std::copy_n(packet.data() + packet.size() - 16, 16, mac.begin());
+        if (!crypto::verify_beacon_mac(k_beacon, flags, body_span, mac)) {
+            return Error{809, "beacon MAC verification failed"};
+        }
+    }
+
     auto j = json::from_msgpack(body_span.begin(), body_span.end(), true, false);
     if (j.is_discarded() || !j.is_object()) {
         return Error{806, "failed to parse beacon messagepack body"};
@@ -98,54 +122,46 @@ Result<Beacon> decode_beacon(std::span<const std::uint8_t> packet) {
     if (!j.contains("net") || !j["net"].is_binary() || j["net"].get_binary().size() != 8) {
         return Error{807, "beacon missing or invalid 'net'"};
     }
-    if (!j.contains("sync_port") || !j["sync_port"].is_number_unsigned()) {
-        return Error{807, "beacon missing 'sync_port'"};
-    }
-    if (!j.contains("dns_port") || !j["dns_port"].is_number_unsigned()) {
-        return Error{807, "beacon missing 'dns_port'"};
-    }
-    if (!j.contains("ips") || !j["ips"].is_array()) {
-        return Error{807, "beacon missing 'ips'"};
-    }
-    if (!j.contains("epoch") || !j["epoch"].is_number_unsigned()) {
-        return Error{807, "beacon missing 'epoch'"};
-    }
-    if (!j.contains("seq") || !j["seq"].is_number_unsigned()) {
-        return Error{807, "beacon missing 'seq'"};
-    }
-    if (!j.contains("ts") || !j["ts"].is_number_unsigned()) {
-        return Error{807, "beacon missing 'ts'"};
-    }
 
-    Beacon beacon;
-    beacon.type = j["t"].get<std::string>();
-    beacon.version = {j["v"][0].get<std::uint8_t>(), j["v"][1].get<std::uint8_t>()};
+    Beacon b;
+    b.type = j["t"].get<std::string>();
+    b.version = {j["v"][0].get<std::uint8_t>(), j["v"][1].get<std::uint8_t>()};
 
     const auto& node_bin = j["node"].get_binary();
-    std::copy_n(node_bin.begin(), 16, beacon.node_id.begin());
+    std::copy_n(node_bin.begin(), 16, b.node_id.begin());
 
-    beacon.name = j["name"].get<std::string>();
+    b.name = j["name"].get<std::string>();
 
     const auto& net_bin = j["net"].get_binary();
-    std::copy_n(net_bin.begin(), 8, beacon.net.begin());
+    std::copy_n(net_bin.begin(), 8, b.net.begin());
 
-    beacon.sync_port = j["sync_port"].get<std::uint16_t>();
-    beacon.dns_port = j["dns_port"].get<std::uint16_t>();
+    if (j.contains("sync_port") && j["sync_port"].is_number_unsigned()) {
+        b.sync_port = j["sync_port"].get<std::uint16_t>();
+    }
+    if (j.contains("dns_port") && j["dns_port"].is_number_unsigned()) {
+        b.dns_port = j["dns_port"].get<std::uint16_t>();
+    }
 
-    for (const auto& item : j["ips"]) {
-        if (item.is_binary()) {
-            const auto& ip_bin = item.get_binary();
-            if (ip_bin.size() == 4 || ip_bin.size() == 16) {
-                beacon.ips.emplace_back(ip_bin.begin(), ip_bin.end());
+    if (j.contains("ips") && j["ips"].is_array()) {
+        for (const auto& item : j["ips"]) {
+            if (item.is_binary()) {
+                const auto& bin = item.get_binary();
+                b.ips.emplace_back(bin.begin(), bin.end());
             }
         }
     }
 
-    beacon.epoch = j["epoch"].get<std::uint64_t>();
-    beacon.seq = j["seq"].get<std::uint64_t>();
-    beacon.ts = j["ts"].get<std::uint64_t>();
+    if (j.contains("epoch") && j["epoch"].is_number_unsigned()) {
+        b.epoch = j["epoch"].get<std::uint64_t>();
+    }
+    if (j.contains("seq") && j["seq"].is_number_unsigned()) {
+        b.seq = j["seq"].get<std::uint64_t>();
+    }
+    if (j.contains("ts") && j["ts"].is_number_unsigned()) {
+        b.ts = j["ts"].get<std::uint64_t>();
+    }
 
-    return beacon;
+    return b;
 }
 
 }  // namespace ldns::net

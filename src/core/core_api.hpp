@@ -153,6 +153,10 @@ public:
                                              std::string_view type = "A",
                                              bool trace = false);
 
+    const std::optional<std::array<std::uint8_t, 32>>& k_root() const noexcept { return k_root_; }
+    const std::optional<std::array<std::uint8_t, 32>>& k_beacon() const noexcept { return k_beacon_; }
+    const std::optional<std::array<std::uint8_t, 32>>& k_auth() const noexcept { return k_auth_; }
+
 private:
     CoreApi(Options options, Store store);
     void apply_defaults(domain::AddRequest& request) const;
@@ -170,6 +174,9 @@ private:
     mutable std::vector<std::string> cached_self_addresses_;
     bool psk_configured_{false};
     bool psk_key_file_found_{false};
+    std::optional<std::array<std::uint8_t, 32>> k_root_;
+    std::optional<std::array<std::uint8_t, 32>> k_beacon_;
+    std::optional<std::array<std::uint8_t, 32>> k_auth_;
 
     // Serializes reloads of the in-memory zone against concurrent writers.
     std::mutex zone_reload_mutex_;

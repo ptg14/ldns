@@ -137,8 +137,9 @@ void PeerManager::handle_accept(const asio::error_code& ec, asio::ip::tcp::socke
             auto frame = encode_error_frame(
                 ErrorMessage{ProtocolErrorCode::TooManyPeers, "max peers limit 64 reached"});
             if (frame) {
-                asio::async_write(socket, asio::buffer(frame.value()),
-                                  [s = std::move(socket)](const asio::error_code&, std::size_t) {});
+                auto buf = std::make_shared<std::vector<std::uint8_t>>(std::move(frame.value()));
+                asio::async_write(socket, asio::buffer(*buf),
+                                  [s = std::move(socket), buf](const asio::error_code&, std::size_t) {});
             }
             start_accept();
             return;
@@ -153,6 +154,8 @@ void PeerManager::handle_accept(const asio::error_code& ec, asio::ip::tcp::socke
         s_opts.my_ips = config_.my_ips;
         s_opts.my_epoch = config_.my_epoch;
         s_opts.my_seq = config_.my_seq;
+        s_opts.k_root = config_.k_root;
+        s_opts.k_auth = config_.k_auth;
 
         auto self = shared_from_this();
         auto session = Session::create_inbound(
@@ -226,6 +229,11 @@ void PeerManager::dial_peer(const NodeId& node_id, const std::string& address, s
     auto ip = asio::ip::make_address(address, ec);
     if (ec) return;
 
+    {
+        std::lock_guard lock(mutex_);
+        if (active_sessions_.size() >= kMaxPeersLimit) return;
+    }
+
     asio::ip::tcp::endpoint target(ip, port);
 
     SessionOptions s_opts;
@@ -237,6 +245,8 @@ void PeerManager::dial_peer(const NodeId& node_id, const std::string& address, s
     s_opts.my_ips = config_.my_ips;
     s_opts.my_epoch = config_.my_epoch;
     s_opts.my_seq = config_.my_seq;
+    s_opts.k_root = config_.k_root;
+    s_opts.k_auth = config_.k_auth;
 
     auto self = shared_from_this();
     auto session = Session::create_outbound(

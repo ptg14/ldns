@@ -1,4 +1,5 @@
 #include "core/resolver/pipeline.hpp"
+#include "core/net/crypto.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -282,7 +283,10 @@ PipelineResult ResolverPipeline::resolve(const dns::Message& query,
         // --- Step 3: Upstream ----------------------------------------------
         if (upstream_) {
             Message upstream_query;
-            upstream_query.id = query.id;
+            std::uint16_t rand_id = 0;
+            crypto::random_bytes(std::span<std::uint8_t>(
+                reinterpret_cast<std::uint8_t*>(&rand_id), sizeof(rand_id)));
+            upstream_query.id = rand_id;
             upstream_query.flags = query.flags & dns::kRd;  // pass recursion desired
             upstream_query.questions.push_back(
                 dns::Question{current, question.type, question.qclass});

@@ -1,0 +1,34 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = "configure" ]; then
+    # Create system user and group for ldns if not already present
+    if ! getent passwd ldns >/dev/null; then
+        adduser --system --group --no-create-home --home /var/lib/ldns \
+            --gecos "Ldns DNS Daemon" ldns >/dev/null 2>&1 || true
+    fi
+
+    # Ensure state and config directories exist with restricted permissions
+    mkdir -p /var/lib/ldns /etc/ldns
+    chown -R ldns:ldns /var/lib/ldns /etc/ldns
+    chmod 0750 /var/lib/ldns /etc/ldns
+
+    # Install default config if not present
+    if [ ! -f /etc/ldns/config.toml ] && [ -f /usr/share/ldns/config.example.toml ]; then
+        cp /usr/share/ldns/config.example.toml /etc/ldns/config.toml
+        chown ldns:ldns /etc/ldns/config.toml
+        chmod 0640 /etc/ldns/config.toml
+    fi
+
+    # Grant binary permission to bind port 53 without running as root
+    if command -v setcap >/dev/null 2>&1; then
+        setcap 'cap_net_bind_service=+ep' /usr/bin/ldns || true
+    fi
+
+    # Reload systemd configuration if available
+    if [ -d /run/systemd/system ]; then
+        systemctl --system daemon-reload >/dev/null 2>&1 || true
+    fi
+fi
+
+exit 0

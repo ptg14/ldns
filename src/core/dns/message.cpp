@@ -491,10 +491,11 @@ Result<std::vector<std::uint8_t>> parse_ipv6(std::string_view text) {
             auto v4 = parse_ipv4(part);
             if (!v4) return Error{121, "invalid IPv4 tail in IPv6 address"};
             if (group > 6) return Error{121, "invalid IPv6 address"};
-            bytes[group * 2] = v4.value()[0];
-            bytes[group * 2 + 1] = v4.value()[1];
-            bytes[group * 2 + 2] = v4.value()[2];
-            bytes[group * 2 + 3] = v4.value()[3];
+            const auto ugroup = static_cast<std::size_t>(group);
+            bytes[ugroup * 2] = v4.value()[0];
+            bytes[ugroup * 2 + 1] = v4.value()[1];
+            bytes[ugroup * 2 + 2] = v4.value()[2];
+            bytes[ugroup * 2 + 3] = v4.value()[3];
             group += 2;
             break;
         }
@@ -509,8 +510,9 @@ Result<std::vector<std::uint8_t>> parse_ipv6(std::string_view text) {
             else return Error{121, "invalid IPv6 address"};
             value = static_cast<std::uint16_t>((value << 4) | static_cast<std::uint16_t>(digit));
         }
-        bytes[group * 2] = static_cast<std::uint8_t>(value >> 8);
-        bytes[group * 2 + 1] = static_cast<std::uint8_t>(value & 0xFF);
+        const auto ugroup = static_cast<std::size_t>(group);
+        bytes[ugroup * 2] = static_cast<std::uint8_t>(value >> 8);
+        bytes[ugroup * 2 + 1] = static_cast<std::uint8_t>(value & 0xFF);
         ++group;
 
         if (colon == std::string_view::npos) break;
@@ -529,12 +531,15 @@ Result<std::vector<std::uint8_t>> parse_ipv6(std::string_view text) {
         const int shift = 8 - group;
         if (shift <= 0) return Error{121, "invalid IPv6 address"};
         for (int i = group - 1; i >= gap; --i) {
-            bytes[(i + shift) * 2] = bytes[i * 2];
-            bytes[(i + shift) * 2 + 1] = bytes[i * 2 + 1];
+            const auto dst = static_cast<std::size_t>(i + shift);
+            const auto src = static_cast<std::size_t>(i);
+            bytes[dst * 2] = bytes[src * 2];
+            bytes[dst * 2 + 1] = bytes[src * 2 + 1];
         }
         for (int i = gap; i < gap + shift; ++i) {
-            bytes[i * 2] = 0;
-            bytes[i * 2 + 1] = 0;
+            const auto idx = static_cast<std::size_t>(i);
+            bytes[idx * 2] = 0;
+            bytes[idx * 2 + 1] = 0;
         }
     } else if (gap >= 0 && group != 8) {
         return Error{121, "invalid IPv6 address"};

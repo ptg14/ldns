@@ -1,0 +1,107 @@
+# =============================================================================
+# Ldns Configuration File (Example)
+# Reference: docs/SPEC.md §11, docs/PLAN.md
+# =============================================================================
+
+[network]
+# Name of the Ldns cluster network. Only peers with the same network name will pair.
+name = "default"
+
+# Path to the Pre-Shared Key (PSK) file for network authentication and AEAD encryption.
+# Leave empty for an open LAN network.
+# key_file = "/etc/ldns/psk.key"
+
+# Network interfaces to advertise and bind ("auto" or a list of interface names/IPs).
+interfaces = "auto"
+
+# Specific interface or IP to advertise for `self` records.
+# self_interface = "eth0"
+# self_ip = "192.168.1.100"
+
+# UDP discovery multicast/broadcast port (default: 5390).
+discovery_port = 5390
+
+# TCP peer synchronization port (default: 5391).
+sync_port = 5391
+
+# Manual peers to connect to (useful across subnets or when multicast is blocked).
+# manual_peers = ["192.168.1.50:5391", "10.0.0.2:5391"]
+manual_peers = []
+
+
+[server]
+# IP addresses to listen on for incoming DNS queries ("auto" binds to loopback and LAN IPs).
+listen = ["auto"]
+
+# Access control list: "private" permits RFC 1918 / loopback / link-local addresses.
+# Can also be specific CIDRs like ["127.0.0.0/8", "192.168.1.0/24"].
+allow = ["private"]
+
+# Rate limit for DNS queries per client IP (queries per second).
+rate_limit_qps = 200
+
+
+[peers]
+# Delay in milliseconds before hedging (sending a speculative query to a backup peer).
+hedge_ms = 250
+
+# Total peer resolution budget in milliseconds before falling back to upstream.
+budget_ms = 1500
+
+# Whether to serve stale peer cache if all peer attempts fail or timeout.
+serve_stale = true
+
+# Time in seconds to retain records of peers that have gone offline.
+offline_retention_seconds = 86400
+
+
+[upstream]
+# Upstream DNS servers ("auto" reads system resolv.conf or Windows interface DNS).
+servers = ["auto"]
+
+# Fallback upstream DNS servers if system DNS servers are unreachable.
+fallback = ["1.1.1.1", "8.8.8.8"]
+
+# Timeout in milliseconds for upstream DNS queries.
+timeout_ms = 2000
+
+# Maximum number of retries for failed upstream DNS requests.
+retries = 1
+
+
+[cache]
+# Maximum number of entries in the in-memory DNS cache.
+max_entries = 50000
+
+# Maximum TTL in seconds for peer DNS records cached locally.
+peer_ttl_cap = 30
+
+# Maximum TTL in seconds for upstream DNS records cached locally.
+upstream_ttl_cap = 300
+
+# TTL in seconds for negative caching (NXDOMAIN / NODATA).
+negative_ttl = 5
+
+
+[domains]
+# Default TTL in seconds for newly created local domain records.
+default_ttl = 60
+
+# Warn when creating domains under public top-level domains (.com, .org, etc.).
+warn_public_tld = true
+
+
+[system]
+# Whether Ldns should automatically configure the host operating system's DNS resolvers.
+manage_os_dns = false
+
+# Restore previous OS DNS configuration on clean daemon exit.
+restore_on_exit = true
+
+
+[ui]
+# Interface language: "auto", "vi", or "en".
+language = "auto"
+
+# Interface theme: "auto", "dark", "light", or "none".
+theme = "auto"

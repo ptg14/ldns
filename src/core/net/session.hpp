@@ -40,6 +40,8 @@ struct SessionOptions {
     std::chrono::milliseconds handshake_timeout{5000};
     std::chrono::milliseconds ping_interval{5000};
     std::chrono::milliseconds ping_timeout{15000};
+    std::optional<std::array<std::uint8_t, 32>> k_root;
+    std::optional<std::array<std::uint8_t, 32>> k_auth;
 };
 
 class Session : public std::enable_shared_from_this<Session> {
@@ -68,6 +70,7 @@ public:
     void send_pong();
     void send_bye();
     void send_error(ProtocolErrorCode code, std::string msg);
+    void send_error_and_close(ProtocolErrorCode code, std::string msg);
     void send_peers(const std::vector<PeerItem>& peers);
 
     SessionState state() const noexcept { return state_; }
@@ -85,10 +88,11 @@ private:
 
     void do_connect(const asio::ip::tcp::endpoint& target);
     void do_handshake_send_hello();
+    void send_unencrypted_frame(std::vector<std::uint8_t> framed_bytes);
     void start_read_length();
     void handle_read_length(const asio::error_code& ec, std::size_t bytes);
     void handle_read_payload(const asio::error_code& ec, std::size_t bytes);
-    void handle_incoming_message(const ParsedMessage& msg);
+    void handle_incoming_message(const ParsedMessage& msg, std::span<const std::uint8_t> raw_payload);
 
     void start_heartbeat();
     void schedule_ping();
@@ -118,6 +122,17 @@ private:
     std::array<std::uint8_t, 4> length_buffer_{};
     std::vector<std::uint8_t> payload_buffer_;
     std::deque<std::vector<std::uint8_t>> write_queue_;
+
+    bool aead_active_{false};
+    std::array<std::uint8_t, 32> send_key_{};
+    std::array<std::uint8_t, 32> recv_key_{};
+    std::array<std::uint8_t, 32> th_{};
+    std::uint64_t send_counter_{0};
+    std::uint64_t recv_counter_{0};
+    std::vector<std::uint8_t> raw_my_hello_;
+    std::vector<std::uint8_t> raw_peer_hello_;
+    std::chrono::steady_clock::time_point update_rate_window_start_{};
+    std::size_t update_ops_in_window_{0};
 
     bool closed_{false};
 };

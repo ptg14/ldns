@@ -46,6 +46,8 @@ struct PeerManagerConfig {
     std::vector<std::vector<std::uint8_t>> my_ips;
     std::uint64_t my_epoch{0};
     std::uint64_t my_seq{0};
+    std::optional<std::array<std::uint8_t, 32>> k_root;
+    std::optional<std::array<std::uint8_t, 32>> k_auth;
 };
 
 class PeerManager : public std::enable_shared_from_this<PeerManager> {

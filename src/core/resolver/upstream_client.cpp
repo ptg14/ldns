@@ -125,6 +125,7 @@ Result<UpstreamResponse> UpstreamClient::try_server(const Endpoint& target,
         auto udp_res = query_udp(target, encoded.value(), timeout);
         if (udp_res) {
             auto msg = std::move(udp_res.value());
+            if (msg.id != query.id) continue;  // Drop mismatched / unsolicited response
             // If truncated, retry via TCP per RFC 1035 §4.2.2 / SPEC §6.3.
             if (msg.truncated()) {
                 auto tcp_res = query_tcp(target, encoded.value(), timeout);
@@ -173,9 +174,10 @@ Result<dns::Message> UpstreamClient::query_udp(const Endpoint& target,
     const udp::endpoint server_ep(to_asio(target.ip), target.port);
     socket.open(server_ep.protocol(), ec);
     if (ec) return Error{803, "cannot open udp socket: " + ec.message()};
+    socket.connect(server_ep, ec);
+    if (ec) return Error{803, "cannot connect udp socket to upstream: " + ec.message()};
 
     std::array<std::uint8_t, 4096> recv_buf{};
-    udp::endpoint sender_ep;
     std::size_t received_bytes = 0;
     bool timed_out = false;
 
@@ -189,19 +191,19 @@ Result<dns::Message> UpstreamClient::query_udp(const Endpoint& target,
         }
     });
 
-    socket.async_send_to(asio::buffer(wire.data(), wire.size()), server_ep,
-                         [&](const asio::error_code& send_ec, std::size_t) {
-                             if (!send_ec) {
-                                 socket.async_receive_from(
-                                     asio::buffer(recv_buf), sender_ep,
-                                     [&](const asio::error_code& recv_ec, std::size_t bytes) {
-                                         if (!recv_ec) {
-                                             received_bytes = bytes;
-                                             timer.cancel();
-                                         }
-                                     });
-                             }
-                         });
+    socket.async_send(asio::buffer(wire.data(), wire.size()),
+                      [&](const asio::error_code& send_ec, std::size_t) {
+                          if (!send_ec) {
+                              socket.async_receive(
+                                  asio::buffer(recv_buf),
+                                  [&](const asio::error_code& recv_ec, std::size_t bytes) {
+                                      if (!recv_ec) {
+                                          received_bytes = bytes;
+                                          timer.cancel();
+                                      }
+                                  });
+                          }
+                      });
 
     io.run();
     if (timed_out) return Error{802, "udp timeout"};
