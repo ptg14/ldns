@@ -1,0 +1,142 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    name: Build Linux x86_64 (.tar.gz, .deb)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up vcpkg
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git "$RUNNER_TEMP/vcpkg"
+          "$RUNNER_TEMP/vcpkg/bootstrap-vcpkg.sh" -disableMetrics
+          echo "VCPKG_ROOT=$RUNNER_TEMP/vcpkg" >> "$GITHUB_ENV"
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build autoconf autoconf-archive automake libtool
+
+      - name: Configure
+        run: cmake --preset linux-release
+
+      - name: Build
+        run: cmake --build --preset linux-release
+
+      - name: Test
+        run: ctest --preset linux-release
+
+      - name: Package with CPack
+        run: |
+          cd build/linux-release
+          cpack -G "TGZ;DEB"
+          mkdir -p ../../dist
+          cp *.tar.gz *.deb ../../dist/
+
+      - name: Upload Linux packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: packages-linux
+          path: dist/*
+          retention-days: 1
+
+  build-windows:
+    name: Build Windows x64 (.zip)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up vcpkg
+        shell: pwsh
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git "$env:RUNNER_TEMP/vcpkg"
+          & "$env:RUNNER_TEMP/vcpkg/bootstrap-vcpkg.bat" -disableMetrics
+          "VCPKG_ROOT=$env:RUNNER_TEMP/vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756  # v1.13.0
+        with:
+          arch: x64
+
+      - name: Set up Ninja
+        shell: pwsh
+        run: |
+          $ninja = Get-ChildItem "$env:ProgramFiles\Microsoft Visual Studio" -Filter ninja.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($ninja) {
+            Split-Path $ninja.FullName | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          } else {
+            choco install ninja -y --no-progress
+            "C:\ProgramData\chocolatey\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+            $env:Path += ";C:\ProgramData\chocolatey\bin"
+          }
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          cmake -B build/windows-release -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            -DLDNS_BUILD_TESTS=ON
+
+      - name: Build
+        shell: pwsh
+        run: cmake --build build/windows-release
+
+      - name: Test
+        shell: pwsh
+        run: ctest --test-dir build/windows-release --output-on-failure
+
+      - name: Package with CPack
+        shell: pwsh
+        run: |
+          cd build/windows-release
+          cpack -G ZIP
+          New-Item -ItemType Directory -Force -Path ..\..\dist
+          Copy-Item *.zip ..\..\dist\
+
+      - name: Upload Windows package
+        uses: actions/upload-artifact@v4
+        with:
+          name: packages-windows
+          path: dist/*
+          retention-days: 1
+
+  release:
+    name: Publish GitHub Release
+    needs: [build-linux, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Compute SHA256 checksums
+        run: |
+          cd artifacts
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          files: |
+            artifacts/*
+          generate_release_notes: true
+          draft: false
+          prerelease: false

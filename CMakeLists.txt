@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.25)
 
 project(ldns
-    VERSION 0.1.0
+    VERSION 1.0.0
     DESCRIPTION "Peer-to-peer local DNS for LAN"
     LANGUAGES CXX
 )
@@ -139,3 +139,63 @@ if(LDNS_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
 endif()
+
+# ---------------------------------------------------------------------------
+# Installation
+# ---------------------------------------------------------------------------
+include(GNUInstallDirs)
+
+install(TARGETS ldns
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    COMPONENT Application
+)
+
+install(FILES config/config.example.toml
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/ldns
+    COMPONENT Application
+)
+
+install(FILES LICENSE README.md
+    DESTINATION ${CMAKE_INSTALL_DOCDIR}
+    COMPONENT Application
+)
+
+if(UNIX AND NOT APPLE)
+    install(FILES packaging/systemd/ldns.service
+        DESTINATION lib/systemd/system
+        COMPONENT Application
+    )
+endif()
+
+# ---------------------------------------------------------------------------
+# CPack Packaging
+# ---------------------------------------------------------------------------
+set(CPACK_PACKAGE_NAME "ldns")
+set(CPACK_PACKAGE_VENDOR "Ldns Contributors")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Peer-to-peer local DNS for LAN")
+set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+set(CPACK_PACKAGE_CONTACT "https://github.com/ldns/ldns")
+set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
+set(CPACK_RESOURCE_FILE_README "${CMAKE_CURRENT_SOURCE_DIR}/README.md")
+
+if(WIN32)
+    set(CPACK_GENERATOR "ZIP")
+    set(CPACK_PACKAGE_FILE_NAME "ldns-${PROJECT_VERSION}-windows-x64")
+else()
+    set(CPACK_GENERATOR "TGZ;DEB")
+    set(CPACK_PACKAGE_FILE_NAME "ldns-${PROJECT_VERSION}-linux-x86_64")
+
+    # Debian package specifics
+    set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Ldns Contributors <maintainers@ldns.lan>")
+    set(CPACK_DEBIAN_PACKAGE_SECTION "net")
+    set(CPACK_DEBIAN_PACKAGE_PRIORITY "optional")
+    set(CPACK_DEBIAN_PACKAGE_HOMEPAGE "https://github.com/ldns/ldns")
+    set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS OFF)
+    set(CPACK_DEBIAN_PACKAGE_DEPENDS "libc6 (>= 2.34)")
+    set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA
+        "${CMAKE_CURRENT_SOURCE_DIR}/packaging/deb/postinst;${CMAKE_CURRENT_SOURCE_DIR}/packaging/deb/prerm"
+    )
+endif()
+
+include(CPack)
+

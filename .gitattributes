@@ -1,0 +1,10 @@
+# Auto-detect text files and normalize line endings to LF on commit
+* text=auto eol=lf
+
+# Explicit binary files
+*.zip binary
+*.tar.gz binary
+*.deb binary
+*.png binary
+*.ico binary
+*.db binary

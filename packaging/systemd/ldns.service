@@ -1,0 +1,26 @@
+[Unit]
+Description=Ldns - Peer-to-peer local DNS for LAN
+Documentation=https://github.com/ldns/ldns
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ldns
+Group=ldns
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+ExecStart=/usr/bin/ldns daemon --service --config /etc/ldns/config.toml
+Restart=always
+RestartSec=3s
+LimitNOFILE=65536
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/ldns /etc/ldns
+RuntimeDirectory=ldns
+StateDirectory=ldns
+ConfigurationDirectory=ldns
+
+[Install]
+WantedBy=multi-user.target

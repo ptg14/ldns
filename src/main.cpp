@@ -89,15 +89,7 @@ int fail(const Error& error) {
     return cli::exit_code_for(error);
 }
 
-int run_daemon(const GlobalOptions& global, bool foreground) {
-    if (!foreground) {
-        // M8 adds the service/daemon split: the background process is started
-        // by the OS service manager, not by a self-detaching fork.
-        std::cerr << "error: `ldns daemon` needs --foreground until the service "
-                     "integration lands (M8); run: ldns daemon --foreground\n";
-        return cli::kExitUsage;
-    }
-
+int run_daemon(const GlobalOptions& global, bool /*foreground*/) {
     config::Paths paths;
     auto config = load_config(global, paths);
     if (!config) return fail(config.error());
@@ -428,7 +420,9 @@ int main(int argc, char** argv) {
 
     auto* daemon = app.add_subcommand("daemon", "run the DNS server headless with IPC");
     daemon->add_flag("--foreground", options.foreground,
-                     "stay in the foreground (or run as background service)");
+                     "stay in the foreground (default)");
+    daemon->add_flag("--service", options.foreground,
+                     "run as a system service (systemd / Windows SCM)");
 
     auto* doctor_cmd = app.add_subcommand("doctor", "diagnose system environment (port 53, OS DNS, firewall, multicast)");
     doctor_cmd->add_flag("--json", options.json, "machine-readable output");

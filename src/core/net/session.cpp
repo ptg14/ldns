@@ -245,6 +245,51 @@ void Session::send_error(ProtocolErrorCode code, std::string msg) {
     }
 }
 
+void Session::send_error_and_close(ProtocolErrorCode code, std::string msg) {
+    if (closed_ || !socket_.is_open()) {
+        close(msg);
+        return;
+    }
+    auto frame = encode_error_frame(ErrorMessage{code, msg});
+    if (!frame) {
+        close(msg);
+        return;
+    }
+    auto self = shared_from_this();
+    asio::post(socket_.get_executor(), [self, frame_bytes = std::move(frame.value()), reason = std::move(msg)]() mutable {
+        if (self->closed_ || !self->socket_.is_open()) return;
+
+        std::vector<std::uint8_t> wire_bytes;
+        if (!self->aead_active_) {
+            wire_bytes = std::move(frame_bytes);
+        } else {
+            if (frame_bytes.size() < 4) {
+                self->close(reason);
+                return;
+            }
+            std::span<const std::uint8_t> payload(frame_bytes.data() + 4, frame_bytes.size() - 4);
+            std::array<std::uint8_t, 4> ad = {
+                frame_bytes[0], frame_bytes[1], frame_bytes[2], frame_bytes[3]
+            };
+            auto enc = crypto::aead_encrypt(self->send_key_, self->send_counter_++, ad, payload);
+            const std::uint32_t enc_len = static_cast<std::uint32_t>(enc.size());
+            ad[0] = static_cast<std::uint8_t>((enc_len >> 24) & 0xFF);
+            ad[1] = static_cast<std::uint8_t>((enc_len >> 16) & 0xFF);
+            ad[2] = static_cast<std::uint8_t>((enc_len >> 8) & 0xFF);
+            ad[3] = static_cast<std::uint8_t>(enc_len & 0xFF);
+            wire_bytes.reserve(4 + enc.size());
+            wire_bytes.insert(wire_bytes.end(), ad.begin(), ad.end());
+            wire_bytes.insert(wire_bytes.end(), enc.begin(), enc.end());
+        }
+
+        auto buf = std::make_shared<std::vector<std::uint8_t>>(std::move(wire_bytes));
+        asio::async_write(self->socket_, asio::buffer(*buf),
+                          [self, buf, reason = std::move(reason)](const asio::error_code&, std::size_t) {
+                              self->close(reason);
+                          });
+    });
+}
+
 void Session::send_peers(const std::vector<PeerItem>& peers) {
     auto frame = encode_peers_frame(PeersMessage{peers});
     if (frame) send_frame(std::move(frame.value()));
@@ -277,8 +322,7 @@ void Session::handle_read_length(const asio::error_code& ec, std::size_t bytes) 
                               static_cast<std::uint32_t>(length_buffer_[3]);
 
     if (len > kMaxFrameSize) {
-        send_error(ProtocolErrorCode::Malformed, "frame size exceeds 4 MiB limit");
-        close("frame length exceeds 4 MiB limit");
+        send_error_and_close(ProtocolErrorCode::Malformed, "frame size exceeds 4 MiB limit");
         return;
     }
 
@@ -311,8 +355,7 @@ void Session::handle_read_payload(const asio::error_code& ec, std::size_t bytes)
         auto dec = crypto::aead_decrypt(
             recv_key_, recv_counter_++, length_buffer_, payload_span);
         if (!dec) {
-            send_error(ProtocolErrorCode::Auth, "decryption failed");
-            close("decryption failed: " + dec.error().message);
+            send_error_and_close(ProtocolErrorCode::Auth, "decryption failed: " + dec.error().message);
             return;
         }
         decrypted_payload = std::move(dec.value());
@@ -321,8 +364,7 @@ void Session::handle_read_payload(const asio::error_code& ec, std::size_t bytes)
 
     auto parsed = parse_payload(payload_span);
     if (!parsed) {
-        send_error(ProtocolErrorCode::Malformed, "failed to parse messagepack");
-        close("failed to parse messagepack: " + parsed.error().message);
+        send_error_and_close(ProtocolErrorCode::Malformed, "failed to parse messagepack: " + parsed.error().message);
         return;
     }
 
@@ -342,8 +384,7 @@ void Session::handle_incoming_message(const ParsedMessage& msg, std::span<const 
             }
 
             if (msg.type != MessageType::Hello || !msg.hello) {
-                send_error(ProtocolErrorCode::Malformed, "expected HELLO during handshake");
-                close("expected HELLO during handshake");
+                send_error_and_close(ProtocolErrorCode::Malformed, "expected HELLO during handshake");
                 return;
             }
 
@@ -351,30 +392,26 @@ void Session::handle_incoming_message(const ParsedMessage& msg, std::span<const 
 
             // 1. Check version major (protocol §5.2)
             if (h.version[0] != 1) {
-                send_error(ProtocolErrorCode::Version, "unsupported version major");
-                close("version mismatch");
+                send_error_and_close(ProtocolErrorCode::Version, "unsupported version major");
                 return;
             }
 
             // 2. Check network hash (protocol §5.2)
             if (h.net != options_.net_hash) {
-                send_error(ProtocolErrorCode::Network, "network mismatch");
-                close("network mismatch");
+                send_error_and_close(ProtocolErrorCode::Network, "network mismatch");
                 return;
             }
 
             // 3. Check self connection (protocol §5.2)
             if (h.node_id == options_.my_node_id) {
-                send_error(ProtocolErrorCode::Self, "connected to self");
-                close("connected to self");
+                send_error_and_close(ProtocolErrorCode::Self, "connected to self");
                 return;
             }
 
             // 4. Check PSK flag (protocol §5.2)
             const bool my_has_psk = options_.k_root.has_value();
             if (h.psk != my_has_psk) {
-                send_error(ProtocolErrorCode::Auth, "psk configuration mismatch");
-                close("psk mismatch");
+                send_error_and_close(ProtocolErrorCode::Auth, "psk configuration mismatch");
                 return;
             }
 
@@ -442,21 +479,18 @@ void Session::handle_incoming_message(const ParsedMessage& msg, std::span<const 
         }
 
         if (msg.type != MessageType::Auth || !msg.auth) {
-            send_error(ProtocolErrorCode::Auth, "expected AUTH frame");
-            close("expected AUTH frame");
+            send_error_and_close(ProtocolErrorCode::Auth, "expected AUTH frame");
             return;
         }
 
         if (role_ == SessionRole::Initiator) {
             if (!options_.k_auth || !crypto::verify_auth_mac(*options_.k_auth, 'R', th_, msg.auth->mac)) {
-                send_error(ProtocolErrorCode::Auth, "authentication failed");
-                close("invalid responder AUTH mac");
+                send_error_and_close(ProtocolErrorCode::Auth, "authentication failed: invalid responder AUTH mac");
                 return;
             }
         } else {
             if (!options_.k_auth || !crypto::verify_auth_mac(*options_.k_auth, 'I', th_, msg.auth->mac)) {
-                send_error(ProtocolErrorCode::Auth, "authentication failed");
-                close("invalid initiator AUTH mac");
+                send_error_and_close(ProtocolErrorCode::Auth, "authentication failed: invalid initiator AUTH mac");
                 return;
             }
 

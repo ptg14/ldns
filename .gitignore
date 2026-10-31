@@ -28,3 +28,7 @@ ldns.db-*
 /leak-*
 /timeout-*
 /oom-*
+
+# Other
+CLAUDE.md
+process.md

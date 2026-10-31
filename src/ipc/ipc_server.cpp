@@ -9,6 +9,7 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#include <sddl.h>
 #else
 #include <poll.h>
 #include <sys/socket.h>
@@ -18,6 +19,12 @@
 #endif
 
 namespace ldns::ipc {
+
+namespace {
+
+constexpr std::size_t kMaxIpcRequestBytes = 1024 * 1024; // 1 MiB
+
+}  // namespace
 
 IpcServer::IpcServer(CoreApi& api, std::string endpoint)
     : api_(api),
@@ -245,13 +252,23 @@ Response IpcServer::handle_rpc_call(const Request& req) {
 
 void IpcServer::run_listener_thread() {
 #ifdef _WIN32
+    SECURITY_ATTRIBUTES sa{};
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = FALSE;
+    PSECURITY_DESCRIPTOR p_sd = nullptr;
+    // DACL: Allow Generic All (GA) to Builtin Administrators (BA), SYSTEM (SY), and Owner Rights (OW)
+    if (ConvertStringSecurityDescriptorToSecurityDescriptorA(
+            "D:(A;;GA;;;BA)(A;;GA;;;SY)(A;;GA;;;OW)", SDDL_REVISION_1, &p_sd, nullptr)) {
+        sa.lpSecurityDescriptor = p_sd;
+    }
+
     while (running_) {
         HANDLE pipe = CreateNamedPipeA(
             endpoint_.c_str(),
             PIPE_ACCESS_DUPLEX,
             PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
             PIPE_UNLIMITED_INSTANCES,
-            4096, 4096, 0, nullptr);
+            4096, 4096, 0, p_sd ? &sa : nullptr);
 
         if (pipe == INVALID_HANDLE_VALUE) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -270,6 +287,10 @@ void IpcServer::run_listener_thread() {
             DWORD bytes_read = 0;
 
             while (ReadFile(pipe, chunk, sizeof(chunk), &bytes_read, nullptr) && bytes_read > 0) {
+                if (req_buffer.size() + bytes_read > kMaxIpcRequestBytes) {
+                    req_buffer.clear();
+                    break;
+                }
                 req_buffer.append(chunk, bytes_read);
                 if (req_buffer.find('\n') != std::string::npos) {
                     break;
@@ -297,6 +318,10 @@ void IpcServer::run_listener_thread() {
             DisconnectNamedPipe(pipe);
         }
         CloseHandle(pipe);
+    }
+
+    if (p_sd) {
+        LocalFree(p_sd);
     }
 #else
     ::unlink(endpoint_.c_str());
@@ -330,6 +355,10 @@ void IpcServer::run_listener_thread() {
                 char chunk[1024];
                 ssize_t n = 0;
                 while ((n = ::read(client_fd, chunk, sizeof(chunk))) > 0) {
+                    if (req_buffer.size() + static_cast<std::size_t>(n) > kMaxIpcRequestBytes) {
+                        req_buffer.clear();
+                        break;
+                    }
                     req_buffer.append(chunk, static_cast<std::size_t>(n));
                     if (req_buffer.find('\n') != std::string::npos) break;
                 }

@@ -137,8 +137,9 @@ void PeerManager::handle_accept(const asio::error_code& ec, asio::ip::tcp::socke
             auto frame = encode_error_frame(
                 ErrorMessage{ProtocolErrorCode::TooManyPeers, "max peers limit 64 reached"});
             if (frame) {
-                asio::async_write(socket, asio::buffer(frame.value()),
-                                  [s = std::move(socket)](const asio::error_code&, std::size_t) {});
+                auto buf = std::make_shared<std::vector<std::uint8_t>>(std::move(frame.value()));
+                asio::async_write(socket, asio::buffer(*buf),
+                                  [s = std::move(socket), buf](const asio::error_code&, std::size_t) {});
             }
             start_accept();
             return;

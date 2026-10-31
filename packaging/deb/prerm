@@ -1,0 +1,11 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = "remove" ] || [ "$1" = "deconfigure" ]; then
+    if [ -d /run/systemd/system ]; then
+        systemctl --system stop ldns.service >/dev/null 2>&1 || true
+        systemctl --system disable ldns.service >/dev/null 2>&1 || true
+    fi
+fi
+
+exit 0

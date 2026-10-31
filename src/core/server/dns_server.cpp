@@ -301,9 +301,15 @@ private:
             }
 
             auto response = owner_.handler_.handle(packet, QueryContext{true, 65535});
-            if (!response) return;
+            if (!response) {
+                close();
+                return;
+            }
             auto encoded = response->message.encode(65535);
-            if (!encoded) return;
+            if (!encoded) {
+                close();
+                return;
+            }
 
             const auto& wire = encoded.value();
             auto frame = std::make_shared<std::vector<std::uint8_t>>();

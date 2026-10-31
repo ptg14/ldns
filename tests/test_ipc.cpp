@@ -1,6 +1,7 @@
 #include "doctest.hpp"
 
 #include "core/core_api.hpp"
+#include "core/version.hpp"
 #include "ipc/ipc_channel.hpp"
 #include "ipc/ipc_client.hpp"
 #include "ipc/ipc_server.hpp"
@@ -150,7 +151,7 @@ TEST_CASE("IPC Server & Client End-to-End") {
         REQUIRE(resp.is_success());
         REQUIRE(resp.result.has_value());
         CHECK(resp.result.value()["running"] == true);
-        CHECK(resp.result.value()["version"] == "0.1.0");
+        CHECK(resp.result.value()["version"] == ldns::version_string());
     }
 
     SUBCASE("zone add and ls and resolve") {

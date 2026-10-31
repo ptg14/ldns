@@ -135,7 +135,7 @@ void DiscoveryService::send_beacon_now(bool is_bye) {
     auto enc = encode_beacon(b, k_b);
     if (!enc) return;
 
-    const auto& packet = enc.value();
+    auto buf = std::make_shared<std::vector<std::uint8_t>>(std::move(enc.value()));
     last_beacon_time_ = std::chrono::steady_clock::now();
 
     // 1. Multicast endpoint
@@ -144,16 +144,16 @@ void DiscoveryService::send_beacon_now(bool is_bye) {
         auto mc_addr = asio::ip::make_address_v4(config_.multicast_group, mc_ec);
         if (!mc_ec) {
             asio::ip::udp::endpoint mc_ep(mc_addr, config_.discovery_port);
-            socket_.async_send_to(asio::buffer(packet), mc_ep,
-                                  [](const asio::error_code&, std::size_t) {});
+            socket_.async_send_to(asio::buffer(*buf), mc_ep,
+                                  [buf](const asio::error_code&, std::size_t) {});
         }
     }
 
     // 2. Broadcast endpoint (fallback per protocol §3.3)
     if (config_.enable_broadcast) {
         asio::ip::udp::endpoint bc_ep(asio::ip::address_v4::broadcast(), config_.discovery_port);
-        socket_.async_send_to(asio::buffer(packet), bc_ep,
-                              [](const asio::error_code&, std::size_t) {});
+        socket_.async_send_to(asio::buffer(*buf), bc_ep,
+                              [buf](const asio::error_code&, std::size_t) {});
     }
 }
 

@@ -70,6 +70,7 @@ public:
     void send_pong();
     void send_bye();
     void send_error(ProtocolErrorCode code, std::string msg);
+    void send_error_and_close(ProtocolErrorCode code, std::string msg);
     void send_peers(const std::vector<PeerItem>& peers);
 
     SessionState state() const noexcept { return state_; }
