@@ -29,6 +29,7 @@
 #include "core/version.hpp"
 #include "ipc/ipc_server.hpp"
 #include "ipc/ipc_client.hpp"
+#include "ipc/ipc_channel.hpp"
 #include "os/doctor.hpp"
 #include "os/system_dns_manager.hpp"
 #include "os/service.hpp"
@@ -65,6 +66,7 @@ struct CommandOptions {
     std::string out;
     bool csv{false};
     bool foreground{false};
+    bool service{false};
     bool trace{false};
 };
 
@@ -96,7 +98,47 @@ int fail(const Error& error) {
     return cli::exit_code_for(error);
 }
 
-int run_daemon(const GlobalOptions& global, bool /*foreground*/) {
+int run_daemon(const GlobalOptions& global, bool /*foreground*/, bool as_service = false) {
+#ifdef _WIN32
+    if (as_service) {
+        Runtime* running_rt = nullptr;
+        return os::ServiceManager::run_service(
+            [&]() -> int {
+                config::Paths paths;
+                auto config = load_config(global, paths);
+                if (!config) return fail(config.error());
+
+                RuntimeOptions options;
+                options.core = api_options(std::move(config.value()), paths);
+                options.listen = options.core.config.server.listen;
+                options.rate_limit_qps = options.core.config.server.rate_limit_qps;
+
+                auto runtime = Runtime::create(std::move(options));
+                if (!runtime) return fail(runtime.error());
+
+                if (auto status = runtime.value()->start(); !status) {
+                    return cli::kExitPrivilege;
+                }
+
+                running_rt = runtime.value().get();
+                ipc::IpcServer ipc_server(running_rt->api(), ipc::default_ipc_endpoint(config::InstallKind::Service));
+                ipc_server.set_shutdown_handler([&]() {
+                    if (running_rt) running_rt->request_stop();
+                });
+                (void)ipc_server.start();
+
+                running_rt->run();
+                ipc_server.stop();
+                return cli::kExitOk;
+            },
+            [&]() {
+                if (running_rt) {
+                    running_rt->request_stop();
+                }
+            });
+    }
+#endif
+
     config::Paths paths;
     auto config = load_config(global, paths);
     if (!config) return fail(config.error());
@@ -124,16 +166,12 @@ int run_daemon(const GlobalOptions& global, bool /*foreground*/) {
     std::cout << '\n';
     std::cout.flush();
 
-    // Start IPC JSON-RPC 2.0 server (SPEC §10.1, §12, PLAN M8)
     ipc::IpcServer ipc_server(runtime.value()->api());
     ipc_server.set_shutdown_handler([&]() {
         runtime.value()->request_stop();
     });
     (void)ipc_server.start();
 
-    // SIGINT/SIGTERM (and the Windows console events) request a stop on the
-    // io_context thread, so run() returns and the destructor closes the
-    // sockets. See Runtime::install_signal_handlers.
     runtime.value()->install_signal_handlers();
 
     runtime.value()->run();
@@ -162,6 +200,191 @@ int run_command(const std::string& command, const GlobalOptions& global,
         opt.json = options.json;
         auto result = cli::network_key_cmd(paths, opt);
         if (!result) return fail(result.error());
+        return cli::kExitOk;
+    }
+
+    // Route commands to running daemon via IPC when available
+    ipc::IpcClient client;
+    const bool daemon_online = client.is_available(100);
+
+    if (daemon_online && (command == "add" || command == "set")) {
+        nlohmann::json params;
+        params["name"] = options.name;
+        params["type"] = options.type;
+        params["ttl"] = options.ttl;
+        params["force"] = options.force;
+        if (!options.targets.empty()) {
+            params["targets"] = options.targets;
+        } else {
+            params["is_self"] = true;
+        }
+        std::string method = (command == "add") ? "zone.add" : "zone.set";
+        auto resp = client.call(method, params);
+        if (!resp) return fail(Error{cli::kExitError, resp.error().message});
+        if (!resp.value().is_success()) {
+            return fail(Error{cli::kExitConflict, resp.value().error->message});
+        }
+        const auto& res = resp.value().result.value_or(nlohmann::json{});
+        if (options.json) {
+            std::cout << res.dump(2) << '\n';
+        } else {
+            if (command == "add") {
+                domain::DomainEntry entry;
+                entry.name = res.value("name", options.name);
+                entry.type = res.value("type", options.type);
+                entry.ttl = res.value("ttl", options.ttl);
+                entry.target_kind = res.value("target_kind", "static");
+                if (res.contains("targets") && res["targets"].is_array()) {
+                    entry.targets = res["targets"].get<std::vector<std::string>>();
+                }
+                cli::print_entry_human(entry);
+            } else {
+                std::cout << "updated " << options.name << '\n';
+            }
+        }
+        return cli::kExitOk;
+    }
+
+    if (daemon_online && command == "rm") {
+        nlohmann::json params;
+        params["name"] = options.name;
+        params["type"] = options.type;
+        auto resp = client.call("zone.rm", params);
+        if (!resp) return fail(Error{cli::kExitError, resp.error().message});
+        if (!resp.value().is_success()) {
+            return fail(Error{cli::kExitError, resp.value().error->message});
+        }
+        if (options.json) {
+            std::cout << "{\"removed\":\"" << options.name << "\"}\n";
+        } else {
+            std::cout << "removed " << options.name << '\n';
+        }
+        return cli::kExitOk;
+    }
+
+    if (daemon_online && command == "ls") {
+        nlohmann::json params;
+        if (!list_type.empty()) params["type"] = list_type;
+        auto resp = client.call("zone.ls", params);
+        if (!resp) return fail(Error{cli::kExitError, resp.error().message});
+        if (!resp.value().is_success()) {
+            return fail(Error{cli::kExitError, resp.value().error->message});
+        }
+        const auto& res = resp.value().result.value_or(nlohmann::json{});
+        if (options.json) {
+            std::cout << res.dump(2) << '\n';
+        } else {
+            std::vector<domain::DomainEntry> entries;
+            if (res.is_array()) {
+                for (const auto& item : res) {
+                    domain::DomainEntry e;
+                    e.name = item.value("name", "");
+                    e.type = item.value("type", "");
+                    e.ttl = item.value("ttl", 0u);
+                    e.target_kind = item.value("target_kind", "");
+                    if (item.contains("targets") && item["targets"].is_array()) {
+                        e.targets = item["targets"].get<std::vector<std::string>>();
+                    }
+                    entries.push_back(std::move(e));
+                }
+            }
+            cli::print_entries_human(entries);
+        }
+        return cli::kExitOk;
+    }
+
+    if (daemon_online && command == "status") {
+        auto resp = client.call("status");
+        if (!resp) return fail(Error{cli::kExitError, resp.error().message});
+        if (!resp.value().is_success()) {
+            return fail(Error{cli::kExitError, resp.value().error->message});
+        }
+        const auto& res = resp.value().result.value_or(nlohmann::json{});
+        if (options.json) {
+            std::cout << res.dump(2) << '\n';
+        } else {
+            std::cout << "Node ID:      " << res.value("node_id", "") << '\n'
+                      << "Short ID:     " << res.value("short_id", "") << '\n'
+                      << "Epoch:        " << res.value("epoch", 0) << '\n'
+                      << "Sequence:     " << res.value("seq", 0) << '\n'
+                      << "Network:      " << res.value("network_name", "local") << '\n'
+                      << "Domains:      " << res.value("domain_count", 0) << '\n'
+                      << "Daemon:       running\n";
+        }
+        return cli::kExitOk;
+    }
+
+    if (daemon_online && command == "resolve") {
+        nlohmann::json params;
+        params["name"] = options.name;
+        params["type"] = options.type;
+        params["trace"] = options.trace;
+        auto resp = client.call("resolve", params);
+        if (!resp) return fail(Error{cli::kExitError, resp.error().message});
+        if (!resp.value().is_success()) {
+            return fail(Error{cli::kExitError, resp.value().error->message});
+        }
+        const auto& res = resp.value().result.value_or(nlohmann::json{});
+        if (options.json) {
+            std::cout << res.dump(2) << '\n';
+        } else {
+            if (res.contains("answers") && res["answers"].is_array() && !res["answers"].empty()) {
+                for (const auto& ans : res["answers"]) {
+                    std::cout << ans.value("name", "") << "  "
+                              << ans.value("ttl", 0) << "  IN  "
+                              << ans.value("type", 1) << "  "
+                              << ans.value("rdata", "") << '\n';
+                }
+            } else {
+                std::cout << "No answer\n";
+            }
+        }
+        return cli::kExitOk;
+    }
+
+    if (daemon_online && command == "peers") {
+        auto resp = client.call("peers.list");
+        if (!resp) return fail(Error{cli::kExitError, resp.error().message});
+        if (!resp.value().is_success()) {
+            return fail(Error{cli::kExitError, resp.value().error->message});
+        }
+        const auto& arr = resp.value().result.value_or(nlohmann::json::array());
+        if (options.json) {
+            std::cout << arr.dump(2) << '\n';
+        } else {
+            if (!arr.is_array() || arr.empty()) {
+                std::cout << "no peers\n";
+            } else {
+                for (const auto& p : arr) {
+                    std::cout << p.value("node_id", "") << "  "
+                              << p.value("name", "") << "  "
+                              << p.value("last_addr", "") << '\n';
+                }
+            }
+        }
+        return cli::kExitOk;
+    }
+
+    if (daemon_online && command == "conflicts") {
+        auto resp = client.call("conflicts");
+        if (!resp) return fail(Error{cli::kExitError, resp.error().message});
+        if (!resp.value().is_success()) {
+            return fail(Error{cli::kExitError, resp.value().error->message});
+        }
+        const auto& arr = resp.value().result.value_or(nlohmann::json::array());
+        if (options.json) {
+            std::cout << arr.dump(2) << '\n';
+        } else {
+            if (!arr.is_array() || arr.empty()) {
+                std::cout << "no conflicts\n";
+            } else {
+                for (const auto& item : arr) {
+                    std::cout << item.value("name", "") << " ("
+                              << item.value("type", "") << ") - "
+                              << item.value("distinct_groups", 0) << " conflicting groups\n";
+                }
+            }
+        }
         return cli::kExitOk;
     }
 
@@ -434,7 +657,7 @@ int main(int argc, char** argv) {
     auto* daemon = app.add_subcommand("daemon", "run the DNS server headless with IPC");
     daemon->add_flag("--foreground", options.foreground,
                      "stay in the foreground (default)");
-    daemon->add_flag("--service", options.foreground,
+    daemon->add_flag("--service", options.service,
                      "run as a system service (systemd / Windows SCM)");
 
     auto* doctor_cmd = app.add_subcommand("doctor", "diagnose system environment (port 53, OS DNS, firewall, multicast)");
@@ -530,6 +753,6 @@ int main(int argc, char** argv) {
         }
     }
 
-    if (command == "daemon") return run_daemon(global, options.foreground);
+    if (command == "daemon") return run_daemon(global, options.foreground, options.service);
     return run_command(command, global, options, list_type, peer_subaction);
 }

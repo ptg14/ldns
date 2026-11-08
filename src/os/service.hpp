@@ -1,3 +1,4 @@
+#include <functional>
 #pragma once
 
 #include <string>
@@ -23,6 +24,11 @@ struct ServiceStatusInfo {
 
 class ServiceManager {
 public:
+#ifdef _WIN32
+    /// Runs as a Windows Service managed by Service Control Manager.
+    static int run_service(std::function<int()> runner, std::function<void()> on_stop);
+#endif
+
     /// Returns current state of the Ldns service.
     static ServiceStatusInfo status();
 

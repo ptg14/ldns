@@ -120,6 +120,66 @@ PipelineResult ResolverPipeline::resolve(const dns::Message& query,
                                         std::move(note)});
     };
 
+    // RFC 6303 / RFC 6761: Locally served loopback zones
+    const std::string pipe_qname = question.name.to_string();
+    if (question.type == static_cast<std::uint16_t>(RrType::PTR) &&
+        (pipe_qname == "1.0.0.127.in-addr.arpa." ||
+         (pipe_qname.size() > 16 && pipe_qname.substr(pipe_qname.size() - 17) == ".127.in-addr.arpa.") ||
+         pipe_qname == "1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.ip6.arpa.")) {
+        result.response.set_flag(dns::kAa, true);
+        result.response.set_rcode(Rcode::NoError);
+        ResourceRecord rr;
+        rr.name = question.name;
+        rr.type = static_cast<std::uint16_t>(RrType::PTR);
+        rr.ttl = 86400;
+        auto lh_name = Name::from_presentation("localhost");
+        if (lh_name) {
+            auto rdata = dns::encode_rdata_name(lh_name.value());
+            if (rdata) {
+                rr.rdata = std::move(rdata.value());
+                result.response.answers.push_back(std::move(rr));
+            }
+        }
+        result.resolved_step = ResolutionStep::Local;
+        record_trace(ResolutionStep::Local, question.name, "loopback", Rcode::NoError, "RFC 6303 loopback PTR");
+        return result;
+    }
+    if (pipe_qname == "localhost.") {
+        if (question.type == static_cast<std::uint16_t>(RrType::A)) {
+            result.response.set_flag(dns::kAa, true);
+            result.response.set_rcode(Rcode::NoError);
+            ResourceRecord rr;
+            rr.name = question.name;
+            rr.type = static_cast<std::uint16_t>(RrType::A);
+            rr.ttl = 86400;
+            const std::uint8_t loopback_v4[4] = {127, 0, 0, 1};
+            auto rdata = dns::encode_rdata_a(loopback_v4);
+            if (rdata) {
+                rr.rdata = std::move(rdata.value());
+                result.response.answers.push_back(std::move(rr));
+            }
+            result.resolved_step = ResolutionStep::Local;
+            record_trace(ResolutionStep::Local, question.name, "loopback", Rcode::NoError, "RFC 6761 localhost A");
+            return result;
+        } else if (question.type == static_cast<std::uint16_t>(RrType::AAAA)) {
+            result.response.set_flag(dns::kAa, true);
+            result.response.set_rcode(Rcode::NoError);
+            ResourceRecord rr;
+            rr.name = question.name;
+            rr.type = static_cast<std::uint16_t>(RrType::AAAA);
+            rr.ttl = 86400;
+            const std::uint8_t loopback_v6[16] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1};
+            auto rdata = dns::encode_rdata_aaaa(loopback_v6);
+            if (rdata) {
+                rr.rdata = std::move(rdata.value());
+                result.response.answers.push_back(std::move(rr));
+            }
+            result.resolved_step = ResolutionStep::Local;
+            record_trace(ResolutionStep::Local, question.name, "loopback", Rcode::NoError, "RFC 6761 localhost AAAA");
+            return result;
+        }
+    }
+
     for (int hop = 0; hop < config_.max_cname_chain; ++hop) {
         visited.push_back(current);
 

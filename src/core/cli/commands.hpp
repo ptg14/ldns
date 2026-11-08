@@ -49,6 +49,9 @@ struct AddOptions {
     bool json{false};
 };
 
+void print_entry_human(const domain::DomainEntry& entry);
+void print_entries_human(const std::vector<domain::DomainEntry>& entries);
+
 Result<domain::DomainEntry> add(CoreApi& api, const AddOptions& options);
 Result<domain::DomainEntry> set(CoreApi& api, const AddOptions& options);
 Result<void> remove(CoreApi& api, std::string_view name, std::string_view type);

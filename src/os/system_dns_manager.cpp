@@ -1,5 +1,6 @@
 #include "os/system_dns_manager.hpp"
 #include "core/net/system_dns.hpp"
+#include "core/server/acl.hpp"
 
 #include <cstdlib>
 #include <fstream>
@@ -83,15 +84,36 @@ Result<void> SystemDnsManager::restore() {
     }
 
 #ifdef _WIN32
+    std::vector<std::string> valid_ips;
+    if (!servers.empty()) {
+        std::stringstream ss(servers);
+        std::string ip;
+        while (std::getline(ss, ip, ',')) {
+            auto start = ip.find_first_not_of(" \t\r\n");
+            auto end = ip.find_last_not_of(" \t\r\n");
+            if (start != std::string::npos && end != std::string::npos) {
+                ip = ip.substr(start, end - start + 1);
+            }
+            if (!ip.empty() && IpAddress::parse(ip).has_value()) {
+                valid_ips.push_back(ip);
+            }
+        }
+    }
+
     std::string cmd;
-    if (servers.empty()) {
+    if (valid_ips.empty()) {
         cmd = "powershell -NoProfile -Command \""
               "Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } | "
               "ForEach-Object { Set-DnsClientServerAddress -InterfaceIndex $_.ifIndex -ResetServerAddresses }\"";
     } else {
+        std::string ip_list;
+        for (std::size_t i = 0; i < valid_ips.size(); ++i) {
+            if (i > 0) ip_list += ", ";
+            ip_list += "'" + valid_ips[i] + "'";
+        }
         cmd = "powershell -NoProfile -Command \""
               "Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } | "
-              "ForEach-Object { Set-DnsClientServerAddress -InterfaceIndex $_.ifIndex -ServerAddresses ('" + servers + "'.Split(',')) }\"";
+              "ForEach-Object { Set-DnsClientServerAddress -InterfaceIndex $_.ifIndex -ServerAddresses @(" + ip_list + ") }\"";
     }
     int ret = std::system(cmd.c_str());
     if (ret != 0) {

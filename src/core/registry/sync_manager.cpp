@@ -56,6 +56,27 @@ void SyncManager::on_peer_event(const net::PeerRecord& peer, bool online) {
 
     if (online && peer.session && peer.session->state() == net::SessionState::Established) {
         send_sync_req(peer.session);
+    } else if (!online) {
+        std::lock_guard lock(mutex_);
+        if (peer.session) {
+            void* s_ptr = peer.session.get();
+            for (auto it = incoming_snapshots_.begin(); it != incoming_snapshots_.end(); ) {
+                if (it->first.first == s_ptr || it->first.second == peer.node_id) {
+                    it = incoming_snapshots_.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        } else {
+            for (auto it = incoming_snapshots_.begin(); it != incoming_snapshots_.end(); ) {
+                if (it->first.second == peer.node_id) {
+                    it = incoming_snapshots_.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+        update_buffers_.erase(peer.node_id);
     }
 }
 
@@ -358,8 +379,14 @@ void SyncManager::handle_update(std::shared_ptr<net::Session> session,
         {
             std::lock_guard lock(mutex_);
             auto& buf = update_buffers_[update.owner];
+            const auto now_sc = std::chrono::steady_clock::now();
+            buf.erase(std::remove_if(buf.begin(), buf.end(),
+                                     [&](const BufferedUpdate& bu) {
+                                         return (now_sc - bu.received_at) > std::chrono::seconds(60);
+                                     }),
+                      buf.end());
             if (buf.size() < 100) {
-                buf.push_back({update, std::chrono::steady_clock::now()});
+                buf.push_back({update, now_sc});
             }
         }
         send_sync_req(session, update.owner);
@@ -390,6 +417,9 @@ void SyncManager::process_buffered_updates(const NodeId& owner_id,
             if (match_it != it->second.end()) {
                 next_update = match_it->update;
                 it->second.erase(match_it);
+            }
+            if (it->second.empty()) {
+                update_buffers_.erase(it);
             }
         }
 
@@ -483,6 +513,19 @@ void SyncManager::purge_offline(std::int64_t now_ts) {
     if (now_ts == 0) now_ts = std::time(nullptr);
 
     auto purged_ids = registry_.purge_offline_owners(options_.offline_retention, now_ts);
+    {
+        std::lock_guard lock(mutex_);
+        for (const auto& pid : purged_ids) {
+            update_buffers_.erase(pid);
+            for (auto it = incoming_snapshots_.begin(); it != incoming_snapshots_.end(); ) {
+                if (it->first.second == pid) {
+                    it = incoming_snapshots_.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+    }
     for (const auto& pid : purged_ids) {
         (void)store_.delete_peer_records_for_owner(pid);
     }

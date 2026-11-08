@@ -243,28 +243,38 @@ Result<dns::Message> UpstreamClient::query_tcp(const Endpoint& target,
     std::vector<std::uint8_t> recv_buf;
 
     socket.async_connect(server_ep, [&](const asio::error_code& conn_ec) {
-        if (conn_ec) return;
+        if (conn_ec) {
+            timer.cancel();
+            return;
+        }
         std::array<asio::const_buffer, 2> bufs{
             asio::buffer(length_hdr),
             asio::buffer(wire.data(), wire.size()),
         };
         asio::async_write(socket, bufs, [&](const asio::error_code& write_ec, std::size_t) {
-            if (write_ec) return;
+            if (write_ec) {
+                timer.cancel();
+                return;
+            }
             auto len_buf = std::make_shared<std::array<std::uint8_t, 2>>();
             asio::async_read(socket, asio::buffer(*len_buf),
                              [&, len_buf](const asio::error_code& read_hdr_ec, std::size_t) {
-                                 if (read_hdr_ec) return;
+                                 if (read_hdr_ec) {
+                                     timer.cancel();
+                                     return;
+                                 }
                                  const std::size_t resp_len =
                                      (static_cast<std::size_t>((*len_buf)[0]) << 8) |
                                      (*len_buf)[1];
-                                 if (resp_len < dns::kHeaderSize || resp_len > 65535) return;
+                                 if (resp_len < dns::kHeaderSize || resp_len > 65535) {
+                                     timer.cancel();
+                                     return;
+                                 }
                                  recv_buf.resize(resp_len);
                                  asio::async_read(
                                      socket, asio::buffer(recv_buf),
-                                     [&](const asio::error_code& read_body_ec, std::size_t) {
-                                         if (!read_body_ec) {
-                                             timer.cancel();
-                                         }
+                                     [&](const asio::error_code&, std::size_t) {
+                                         timer.cancel();
                                      });
                              });
         });

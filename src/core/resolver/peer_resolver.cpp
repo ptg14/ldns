@@ -144,6 +144,19 @@ std::optional<dns::Message> PeerResolver::resolve(
 
     const auto overall_deadline = std::chrono::steady_clock::now() + current_config.budget_ms;
 
+    struct QueryCleanup {
+        PeerResolver& resolver;
+        std::vector<std::uint32_t> ids;
+        ~QueryCleanup() {
+            if (!ids.empty()) {
+                std::lock_guard lock(resolver.mutex_);
+                for (auto id : ids) {
+                    resolver.pending_queries_.erase(id);
+                }
+            }
+        }
+    } cleanup{*this};
+
     // Iterate through ranked groups
     for (const auto& group : ranking.groups) {
         if (std::chrono::steady_clock::now() >= overall_deadline) break;
@@ -162,6 +175,7 @@ std::optional<dns::Message> PeerResolver::resolve(
                 req_id = next_req_id_++;
                 pending_queries_[req_id] = pending;
             }
+            cleanup.ids.push_back(req_id);
 
             net::ResolveMessage req;
             req.id = req_id;
@@ -367,6 +381,7 @@ void PeerResolver::handle_resolve_response(std::shared_ptr<net::Session>,
         const auto it = pending_queries_.find(resp.id);
         if (it != pending_queries_.end()) {
             pending = it->second;
+            pending_queries_.erase(it);
         }
     }
     if (pending) {

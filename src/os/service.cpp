@@ -36,6 +36,67 @@ std::string get_current_executable_path() {
 
 } // namespace
 
+#ifdef _WIN32
+static SERVICE_STATUS_HANDLE g_status_handle = nullptr;
+static SERVICE_STATUS g_service_status{};
+static std::function<void()> g_stop_cb = nullptr;
+static std::function<int()> g_service_runner = nullptr;
+
+static DWORD WINAPI ServiceCtrlHandler(DWORD dwControl, DWORD /*dwEventType*/, LPVOID /*lpEventData*/, LPVOID /*lpContext*/) {
+    switch (dwControl) {
+        case SERVICE_CONTROL_STOP:
+        case SERVICE_CONTROL_SHUTDOWN:
+            g_service_status.dwCurrentState = SERVICE_STOP_PENDING;
+            g_service_status.dwControlsAccepted = 0;
+            SetServiceStatus(g_status_handle, &g_service_status);
+            if (g_stop_cb) {
+                g_stop_cb();
+            }
+            return NO_ERROR;
+        default:
+            return ERROR_CALL_NOT_IMPLEMENTED;
+    }
+}
+
+static VOID WINAPI ServiceMain(DWORD /*argc*/, LPSTR* /*argv*/) {
+    g_status_handle = RegisterServiceCtrlHandlerExA("Ldns", ServiceCtrlHandler, nullptr);
+    if (!g_status_handle) return;
+
+    g_service_status.dwServiceType = SERVICE_WIN32_OWN_PROCESS;
+    g_service_status.dwCurrentState = SERVICE_START_PENDING;
+    g_service_status.dwControlsAccepted = SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN;
+    g_service_status.dwWin32ExitCode = 0;
+    SetServiceStatus(g_status_handle, &g_service_status);
+
+    g_service_status.dwCurrentState = SERVICE_RUNNING;
+    SetServiceStatus(g_status_handle, &g_service_status);
+
+    int exit_code = 0;
+    if (g_service_runner) {
+        exit_code = g_service_runner();
+    }
+
+    g_service_status.dwCurrentState = SERVICE_STOPPED;
+    g_service_status.dwWin32ExitCode = exit_code;
+    SetServiceStatus(g_status_handle, &g_service_status);
+}
+
+int ServiceManager::run_service(std::function<int()> runner, std::function<void()> on_stop) {
+    g_service_runner = std::move(runner);
+    g_stop_cb = std::move(on_stop);
+
+    SERVICE_TABLE_ENTRYA service_table[] = {
+        { const_cast<LPSTR>("Ldns"), ServiceMain },
+        { nullptr, nullptr }
+    };
+
+    if (!StartServiceCtrlDispatcherA(service_table)) {
+        return static_cast<int>(GetLastError());
+    }
+    return 0;
+}
+#endif
+
 ServiceStatusInfo ServiceManager::status() {
     ServiceStatusInfo info;
 #ifdef _WIN32
@@ -111,7 +172,7 @@ Result<void> ServiceManager::install(const std::string& binary_path) {
         return Error{4, "Failed to open SCM. Run as Administrator."};
     }
 
-    std::string bin_with_args = "\"" + bin + "\" daemon --foreground";
+    std::string bin_with_args = "\"" + bin + "\" daemon --service";
     SC_HANDLE svc = CreateServiceA(
         scm,
         "Ldns",

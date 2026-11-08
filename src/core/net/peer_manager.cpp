@@ -411,6 +411,7 @@ void PeerManager::on_session_message(std::shared_ptr<Session> session, const Par
             std::lock_guard lock(mutex_);
             const std::string key = to_hex(item.node_id);
             if (peers_.find(key) == peers_.end()) {
+                if (peers_.size() >= kMaxPeersLimit) break;
                 auto& rec = peers_[key];
                 rec.node_id = item.node_id;
                 rec.sync_port = item.sync_port;

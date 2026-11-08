@@ -10,6 +10,9 @@
 #endif
 #include <windows.h>
 #include <sddl.h>
+#ifndef PIPE_REJECT_REMOTE_CLIENTS
+#define PIPE_REJECT_REMOTE_CLIENTS 0x00000008
+#endif
 #else
 #include <poll.h>
 #include <sys/socket.h>
@@ -266,7 +269,7 @@ void IpcServer::run_listener_thread() {
         HANDLE pipe = CreateNamedPipeA(
             endpoint_.c_str(),
             PIPE_ACCESS_DUPLEX,
-            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
             PIPE_UNLIMITED_INSTANCES,
             4096, 4096, 0, p_sd ? &sa : nullptr);
 
@@ -286,14 +289,32 @@ void IpcServer::run_listener_thread() {
             char chunk[1024];
             DWORD bytes_read = 0;
 
-            while (ReadFile(pipe, chunk, sizeof(chunk), &bytes_read, nullptr) && bytes_read > 0) {
-                if (req_buffer.size() + bytes_read > kMaxIpcRequestBytes) {
-                    req_buffer.clear();
+            DWORD total_waited_ms = 0;
+            while (running_) {
+                DWORD bytes_avail = 0;
+                if (!PeekNamedPipe(pipe, nullptr, 0, nullptr, &bytes_avail, nullptr)) {
                     break;
                 }
-                req_buffer.append(chunk, bytes_read);
-                if (req_buffer.find('\n') != std::string::npos) {
-                    break;
+                if (bytes_avail > 0) {
+                    DWORD to_read = (bytes_avail < sizeof(chunk)) ? bytes_avail : static_cast<DWORD>(sizeof(chunk));
+                    if (ReadFile(pipe, chunk, to_read, &bytes_read, nullptr) && bytes_read > 0) {
+                        if (req_buffer.size() + bytes_read > kMaxIpcRequestBytes) {
+                            req_buffer.clear();
+                            break;
+                        }
+                        req_buffer.append(chunk, bytes_read);
+                        if (req_buffer.find('\n') != std::string::npos) {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                } else {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                    total_waited_ms += 10;
+                    if (total_waited_ms >= 5000) {
+                        break;  // Timeout idle client
+                    }
                 }
             }
 
@@ -351,6 +372,11 @@ void IpcServer::run_listener_thread() {
         if (ret > 0 && (pfd.revents & POLLIN)) {
             int client_fd = ::accept(server_fd_, nullptr, nullptr);
             if (client_fd >= 0) {
+                struct timeval tv{};
+                tv.tv_sec = 5;
+                tv.tv_usec = 0;
+                ::setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+                ::setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
                 std::string req_buffer;
                 char chunk[1024];
                 ssize_t n = 0;

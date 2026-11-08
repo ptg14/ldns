@@ -72,6 +72,33 @@ std::optional<HandlerResponse> QueryHandler::handle(std::span<const std::uint8_t
         return HandlerResponse{std::move(response), false};
     }
 
+    // RFC 6303 / RFC 6761: Locally served loopback zones
+    const std::string qname_str = question.name.to_string();
+    if (question.type == type_of(RrType::PTR) &&
+        (qname_str == "1.0.0.127.in-addr.arpa." ||
+         (qname_str.size() > 16 && qname_str.substr(qname_str.size() - 17) == ".127.in-addr.arpa.") ||
+         qname_str == "1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.ip6.arpa.")) {
+        Message resp = make_response_shell(packet);
+        resp.flags = static_cast<std::uint16_t>(resp.flags | (query.flags & dns::kRd));
+        resp.set_flag(dns::kRa, config_.recursive_available);
+        resp.set_flag(dns::kAa, true);
+        resp.set_rcode(Rcode::NoError);
+        resp.questions.push_back(question);
+        ResourceRecord rr;
+        rr.name = question.name;
+        rr.type = type_of(RrType::PTR);
+        rr.ttl = 86400;
+        auto lh_name = Name::from_presentation("localhost");
+        if (lh_name) {
+            auto rdata = dns::encode_rdata_name(lh_name.value());
+            if (rdata) {
+                rr.rdata = std::move(rdata.value());
+                resp.answers.push_back(std::move(rr));
+            }
+        }
+        return HandlerResponse{std::move(resp), true};
+    }
+
     // EDNS0: echo an OPT with our payload size, capped by the client's.
     // An unsupported EDNS version gets BADVERS (extended rcode 16) with an
     // empty answer section (RFC 6891 §6.1.3).

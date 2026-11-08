@@ -25,7 +25,6 @@ namespace {
 
 using json = nlohmann::json;
 
-
 void print_json(const json& document) {
     std::cout << document.dump(2) << '\n';
 }
@@ -41,6 +40,8 @@ json entry_json(const domain::DomainEntry& entry) {
     out["updated"] = entry.updated;
     return out;
 }
+
+}  // namespace
 
 void print_entries_human(const std::vector<domain::DomainEntry>& entries) {
     if (entries.empty()) {
@@ -90,8 +91,6 @@ void print_entry_human(const domain::DomainEntry& entry) {
     }
     std::cout << " (" << entry.type << ", " << entry.target_kind << ", " << entry.ttl << "s)\n";
 }
-
-}  // namespace
 
 int exit_code_for(const Error& error) {
     switch (error.code) {
