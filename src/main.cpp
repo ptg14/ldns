@@ -34,6 +34,13 @@
 #include "os/service.hpp"
 #include "os/firewall.hpp"
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
+
 namespace {
 
 using namespace ldns;
@@ -327,7 +334,13 @@ int run_command(const std::string& command, const GlobalOptions& global,
 }  // namespace
 
 int main(int argc, char** argv) {
-    CLI::App app{"Ldns — peer-to-peer local DNS for LAN", "ldns"};
+#ifdef _WIN32
+    if (::GetConsoleWindow() != nullptr) {
+        ::SetConsoleOutputCP(CP_UTF8);
+        ::SetConsoleCP(CP_UTF8);
+    }
+#endif
+    CLI::App app{"Ldns - peer-to-peer local DNS for LAN", "ldns"};
     app.require_subcommand(0, 1);
     app.set_version_flag(
         "--version", ldns::version_string() + " (protocol " +
@@ -476,7 +489,7 @@ int main(int argc, char** argv) {
 
     try {
         app.parse(argc, argv);
-    } catch (const CLI::ParseError& e) {
+    } catch (const CLI::Error& e) {
         // --help/--version are not errors; anything else is a usage error.
         const int cli_code = app.exit(e);
         return cli_code == 0 ? cli::kExitOk : cli::kExitUsage;

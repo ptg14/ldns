@@ -1,6 +1,6 @@
 # Ldns — Peer-to-Peer Local DNS for LAN
 
-[![CI](https://github.com/ldns/ldns/actions/workflows/ci.yml/badge.svg)](https://github.com/ldns/ldns/actions/workflows/ci.yml)
+[![CI](https://github.com/ptg14/ldns/actions/workflows/ci.yml/badge.svg)](https://github.com/ptg14/ldns/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](https://en.wikipedia.org/wiki/C%2B%2B20)
 [![Version](https://img.shields.io/badge/release-v1.0.0-green.svg)](https://github.com/ldns/ldns/releases)
@@ -194,6 +194,7 @@ ctest --preset windows-ci
 - [Tài liệu Đặc tả Kỹ thuật (SPEC.md)](docs/SPEC.md) — Chi tiết thiết kế toàn diện và các quyết định D1–D14.
 - [Giao thức Ngang hàng (protocol.md)](docs/protocol.md) — Định dạng wire frame, MessagePack schema, và handshake.
 - [Kế hoạch Phát triển (PLAN.md)](docs/PLAN.md) — Lộ trình và bảng theo dõi các milestone.
+- [Hướng dẫn Kiểm thử CLI (TESTING.md)](docs/TESTING.md) — Kịch bản chạy lệnh kiểm thử toàn diện mọi tính năng của CLI app.
 - [Câu hỏi Thường Gặp (FAQ.md)](docs/FAQ.md) — Hướng dẫn xử lý xung đột cổng 53, tường lửa, và phục hồi hệ thống.
 - [Mô hình Đe dọa (threat-model.md)](docs/threat-model.md) — Phân tích bảo mật, ranh giới tin cậy, và chống tấn công mạng LAN.
 

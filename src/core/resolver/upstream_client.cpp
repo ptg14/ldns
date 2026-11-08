@@ -199,9 +199,11 @@ Result<dns::Message> UpstreamClient::query_udp(const Endpoint& target,
                                   [&](const asio::error_code& recv_ec, std::size_t bytes) {
                                       if (!recv_ec) {
                                           received_bytes = bytes;
-                                          timer.cancel();
                                       }
+                                      timer.cancel();
                                   });
+                          } else {
+                              timer.cancel();
                           }
                       });
 
