@@ -1,6 +1,6 @@
 find_package(doctest CONFIG REQUIRED)
 
-add_executable(ldns_tests
+set(TEST_SOURCES
     test_main.cpp
     test_id.cpp
     test_hlc.cpp
@@ -35,7 +35,17 @@ add_executable(ldns_tests
     test_os.cpp
     test_crypto.cpp
 )
-target_link_libraries(ldns_tests PRIVATE ldns_core doctest::doctest)
+
+if(LDNS_BUILD_UI)
+    list(APPEND TEST_SOURCES test_ui.cpp)
+endif()
+
+add_executable(ldns_tests ${TEST_SOURCES})
+if(LDNS_BUILD_UI)
+    target_link_libraries(ldns_tests PRIVATE ldns_core ldns_ui doctest::doctest)
+else()
+    target_link_libraries(ldns_tests PRIVATE ldns_core doctest::doctest)
+endif()
 ldns_set_warnings(ldns_tests)
 
 add_test(NAME ldns_tests COMMAND ldns_tests)

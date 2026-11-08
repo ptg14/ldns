@@ -1,21 +1,22 @@
 #!/usr/bin/env bash
 # Build + test Ldns inside WSL using a native target directory.
 #
-# Usage: wsl-bed build  [preset]   # configure (if needed) and build
-#        wsl-bed test   [preset]   # build then run ctest
-#        wsl-bed clean  [preset]
-#        wsl-bed shell
+# Usage: wsl-build.sh build  [preset]   # configure (if needed) and build
+#        wsl-build.sh test   [preset]   # build then run ctest
+#        wsl-build.sh clean  [preset]
+#        wsl-build.sh shell
 #
 # The source tree lives on /mnt/c (9p, slow for builds), so we build in
-# ~/ldns-build/<preset> and point CMake at the mounted source directory.
+# ~/<project>-build/<preset> and point CMake at the mounted source directory.
 
 set -euo pipefail
 
 ACTION="${1:-test}"
 PRESET="${2:-linux-debug}"
-SRC="/mnt/c/Code/Ldns"
+SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PROJECT_NAME="$(basename "${SRC}")"
 VCPKG_ROOT="${HOME}/vcpkg"
-BUILD_ROOT="${HOME}/ldns-build"
+BUILD_ROOT="${HOME}/${PROJECT_NAME}-build"
 BUILD_DIR="${BUILD_ROOT}/${PRESET}"
 
 export VCPKG_ROOT
@@ -32,8 +33,20 @@ configure() {
         -G Ninja
 }
 
+needs_configure() {
+    [[ ! -f "${BUILD_DIR}/build.ninja" ]] && return 0
+    if [[ -f "${BUILD_DIR}/CMakeCache.txt" ]]; then
+        local cached_src
+        cached_src=$(grep "CMAKE_HOME_DIRECTORY:INTERNAL=" "${BUILD_DIR}/CMakeCache.txt" | cut -d= -f2 || true)
+        [[ "${cached_src}" != "${SRC}" ]] && return 0
+    fi
+    return 1
+}
+
 build() {
-    [[ -f "${BUILD_DIR}/build.ninja" ]] || configure
+    if needs_configure; then
+        configure
+    fi
     cmake --build "${BUILD_DIR}" --parallel
 }
 
@@ -50,7 +63,7 @@ case "${ACTION}" in
         exec bash
         ;;
     *)
-        echo "usage: $0 {configure|build|test|clean|shell} [preset]" >&2
-        exit 2
+        echo "Unknown action: ${ACTION}" >&2
+        exit 1
         ;;
 esac

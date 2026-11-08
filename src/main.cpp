@@ -27,6 +27,15 @@
 #include "core/runtime/runtime.hpp"
 #include "core/util/logger.hpp"
 #include "core/version.hpp"
+
+#ifndef LDNS_ENABLE_UI
+#define LDNS_ENABLE_UI 1
+#endif
+
+#if LDNS_ENABLE_UI
+#include "ui/tui_app.hpp"
+#endif
+
 #include "ipc/ipc_server.hpp"
 #include "ipc/ipc_client.hpp"
 #include "ipc/ipc_channel.hpp"
@@ -556,13 +565,24 @@ int run_command(const std::string& command, const GlobalOptions& global,
 
 }  // namespace
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 int main(int argc, char** argv) {
-#ifdef _WIN32
+#if defined(_WIN32)
     if (::GetConsoleWindow() != nullptr) {
         ::SetConsoleOutputCP(CP_UTF8);
         ::SetConsoleCP(CP_UTF8);
     }
 #endif
+
     CLI::App app{"Ldns - peer-to-peer local DNS for LAN", "ldns"};
     app.require_subcommand(0, 1);
     app.set_version_flag(
@@ -577,6 +597,9 @@ int main(int argc, char** argv) {
     app.add_option("--log-level", global.log_level, "trace|debug|info|warn|error")
         ->check(CLI::IsMember({"trace", "debug", "info", "warn", "warning", "error", "off"}))
         ->default_val("info");
+
+    bool headless = false;
+    app.add_flag("--headless", headless, "Run in headless mode without TUI");
 
     CommandOptions options;
     // `ls --type` filters; it must default to "no filter", unlike add/set/rm
@@ -722,18 +745,6 @@ int main(int argc, char** argv) {
                                     ? std::string()
                                     : app.get_subcommands().front()->get_name();
 
-    if (command.empty()) {
-        // The TUI arrives in M7. Until then be explicit instead of pretending
-        // to start one.
-        std::cout << "ldns " << version_string() << '\n'
-                  << "the interactive TUI is not built yet; use a command:\n"
-                  << "  ldns add app.lan [10.0.0.5] | set | rm | ls | status\n"
-                  << "  ldns resolve google.com [A] [--trace] [--json]\n"
-                  << "  ldns import file.toml | export --out file.toml\n"
-                  << "  ldns daemon --foreground\n"
-                  << "Run `ldns --help` for the full list.\n";
-        return cli::kExitOk;
-    }
 
     ldns::init_logger(global.log_level);
 
@@ -754,5 +765,27 @@ int main(int argc, char** argv) {
     }
 
     if (command == "daemon") return run_daemon(global, options.foreground, options.service);
-    return run_command(command, global, options, list_type, peer_subaction);
+    if (!command.empty()) return run_command(command, global, options, list_type, peer_subaction);
+
+#if LDNS_ENABLE_UI
+    if (headless) {
+        ldns::logger()->info("ldns {} - running headless", ldns::version_string());
+        return cli::kExitOk;
+    }
+
+    // Launch interactive Claude Code style TUI
+    auto api = open_api(global);
+    std::unique_ptr<CoreApi> core;
+    if (api) {
+        core = std::move(api.value());
+    } else {
+        ldns::logger()->warn("Opening TUI with mock fallback: {}", api.error().message);
+    }
+    ldns::ui::TuiApp tui(std::move(core));
+    return tui.run();
+#else
+    (void)headless;
+    std::cout << app.help() << '\n';
+    return cli::kExitOk;
+#endif
 }

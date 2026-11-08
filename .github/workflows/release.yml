@@ -5,13 +5,18 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tag name for release (e.g. v1.0.0)'
+        required: false
+        default: 'v1.0.0'
 
 permissions:
   contents: write
 
 jobs:
   build-linux:
-    name: Build Linux x86_64 (.tar.gz, .deb)
+    name: Build Linux x86_64 (CLI & TUI: .tar.gz, .deb)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -30,11 +35,18 @@ jobs:
       - name: Configure
         run: cmake --preset linux-release
 
-      - name: Build
+      - name: Build (CLI & TUI)
         run: cmake --build --preset linux-release
 
       - name: Test
-        run: ctest --preset linux-release
+        run: ctest --preset linux-release --output-on-failure
+
+      - name: Verify Binaries
+        run: |
+          echo "Verifying ldns (TUI + CLI):"
+          ./build/linux-release/ldns --version
+          echo "Verifying ldns-cli (Headless CLI):"
+          ./build/linux-release/ldns-cli --version
 
       - name: Package with CPack
         run: |
@@ -51,7 +63,7 @@ jobs:
           retention-days: 1
 
   build-windows:
-    name: Build Windows x64 (.zip)
+    name: Build Windows x64 (CLI & TUI: .zip)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -87,15 +99,24 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release `
             -DVCPKG_TARGET_TRIPLET=x64-windows-static `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
-            -DLDNS_BUILD_TESTS=ON
+            -DLDNS_BUILD_TESTS=ON `
+            -DLDNS_BUILD_UI=ON
 
-      - name: Build
+      - name: Build (CLI & TUI)
         shell: pwsh
         run: cmake --build build/windows-release
 
       - name: Test
         shell: pwsh
         run: ctest --test-dir build/windows-release --output-on-failure
+
+      - name: Verify Binaries
+        shell: pwsh
+        run: |
+          Write-Host "Verifying ldns (TUI + CLI):"
+          & .\build\windows-release\ldns.exe --version
+          Write-Host "Verifying ldns-cli (Headless CLI):"
+          & .\build\windows-release\ldns-cli.exe --version
 
       - name: Package with CPack
         shell: pwsh
@@ -131,12 +152,32 @@ jobs:
           sha256sum * > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
+      - name: Determine Release Tag
+        id: vars
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.tag_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/v')
         with:
+          tag_name: ${{ steps.vars.outputs.tag }}
           files: |
             artifacts/*
+          name: "Ldns Release ${{ steps.vars.outputs.tag }}"
+          body: |
+            ## Ldns — Peer-to-Peer Local DNS for LAN (CLI & TUI)
+
+            ### Package Contents
+            - **`ldns`**: Unified executable with Claude Code style interactive TUI & CLI subcommands.
+            - **`ldns-cli`**: Dedicated lightweight headless CLI executable for scripting and server daemon environments.
+            - **System integration**: systemd service unit (`ldns.service`), default configuration (`config.example.toml`).
+
+            ### Artifacts & Checksums
+            See attached `SHA256SUMS.txt` for cryptographic verification.
           generate_release_notes: true
           draft: false
           prerelease: false
