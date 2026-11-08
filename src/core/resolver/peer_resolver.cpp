@@ -146,7 +146,10 @@ std::optional<dns::Message> PeerResolver::resolve(
 
     struct QueryCleanup {
         PeerResolver& resolver;
-        std::vector<std::uint32_t> ids;
+        std::vector<std::uint32_t> ids{};
+
+        explicit QueryCleanup(PeerResolver& r) : resolver(r) {}
+
         ~QueryCleanup() {
             if (!ids.empty()) {
                 std::lock_guard lock(resolver.mutex_);
@@ -155,7 +158,7 @@ std::optional<dns::Message> PeerResolver::resolve(
                 }
             }
         }
-    } cleanup{*this};
+    } cleanup(*this);
 
     // Iterate through ranked groups
     for (const auto& group : ranking.groups) {

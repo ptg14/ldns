@@ -108,6 +108,7 @@ int fail(const Error& error) {
 }
 
 int run_daemon(const GlobalOptions& global, bool /*foreground*/, bool as_service = false) {
+    (void)as_service;
 #ifdef _WIN32
     if (as_service) {
         Runtime* running_rt = nullptr;
