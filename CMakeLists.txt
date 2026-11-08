@@ -23,6 +23,7 @@ endif()
 option(LDNS_BUILD_TESTS "Build unit tests" ON)
 option(LDNS_SANITIZE "Enable AddressSanitizer/UBSan (GCC/Clang)" OFF)
 option(LDNS_WERROR "Treat compiler warnings as errors" ON)
+option(LDNS_BUILD_UI "Build TUI interface" ON)
 
 # ---------------------------------------------------------------------------
 # Compiler warnings
@@ -128,35 +129,50 @@ ldns_set_warnings(ldns_core)
 # ---------------------------------------------------------------------------
 # UI library (Claude Code style inline TUI & terminal widgets)
 # ---------------------------------------------------------------------------
-add_library(ldns_ui STATIC
-    src/ui/term/terminal.cpp
-    src/ui/widgets/welcome_panel.cpp
-    src/ui/widgets/slash_menu.cpp
-    src/ui/widgets/dialog.cpp
-    src/ui/widgets/spinner.cpp
-    src/ui/widgets/status_line.cpp
-    src/ui/widgets/input_box.cpp
-    src/ui/widgets/trace_view.cpp
-    src/ui/widgets/doctor_view.cpp
-    src/ui/widgets/conflict_view.cpp
-    src/ui/widgets/info_view.cpp
-    src/ui/widgets/log_view.cpp
-    src/ui/widgets/peers_view.cpp
-    src/ui/widgets/upstream_view.cpp
-    src/ui/widgets/network_view.cpp
-    src/ui/inline_renderer.cpp
-    src/ui/tui_app.cpp
-)
-target_include_directories(ldns_ui PUBLIC src)
-target_link_libraries(ldns_ui PUBLIC ldns_core)
-ldns_set_warnings(ldns_ui)
+if(LDNS_BUILD_UI)
+    add_library(ldns_ui STATIC
+        src/ui/term/terminal.cpp
+        src/ui/widgets/welcome_panel.cpp
+        src/ui/widgets/slash_menu.cpp
+        src/ui/widgets/dialog.cpp
+        src/ui/widgets/spinner.cpp
+        src/ui/widgets/status_line.cpp
+        src/ui/widgets/input_box.cpp
+        src/ui/widgets/trace_view.cpp
+        src/ui/widgets/doctor_view.cpp
+        src/ui/widgets/conflict_view.cpp
+        src/ui/widgets/info_view.cpp
+        src/ui/widgets/log_view.cpp
+        src/ui/widgets/peers_view.cpp
+        src/ui/widgets/upstream_view.cpp
+        src/ui/widgets/network_view.cpp
+        src/ui/inline_renderer.cpp
+        src/ui/tui_app.cpp
+    )
+    target_include_directories(ldns_ui PUBLIC src)
+    target_link_libraries(ldns_ui PUBLIC ldns_core)
+    ldns_set_warnings(ldns_ui)
+endif()
 
 # ---------------------------------------------------------------------------
-# Executable
+# Executables:
+#   1. ldns     -> Unified binary (TUI interactive when launched without args, or CLI subcommands)
+#   2. ldns-cli -> Dedicated headless CLI binary (prints help when launched without args)
 # ---------------------------------------------------------------------------
 add_executable(ldns src/main.cpp)
-target_link_libraries(ldns PRIVATE ldns_core ldns_ui CLI11::CLI11)
+if(LDNS_BUILD_UI)
+    target_compile_definitions(ldns PRIVATE LDNS_ENABLE_UI=1)
+    target_link_libraries(ldns PRIVATE ldns_core ldns_ui CLI11::CLI11)
+else()
+    target_compile_definitions(ldns PRIVATE LDNS_ENABLE_UI=0)
+    target_link_libraries(ldns PRIVATE ldns_core CLI11::CLI11)
+endif()
 ldns_set_warnings(ldns)
+
+add_executable(ldns-cli src/main.cpp)
+target_compile_definitions(ldns-cli PRIVATE LDNS_ENABLE_UI=0)
+target_link_libraries(ldns-cli PRIVATE ldns_core CLI11::CLI11)
+ldns_set_warnings(ldns-cli)
 
 # ---------------------------------------------------------------------------
 # Tests
@@ -171,7 +187,7 @@ endif()
 # ---------------------------------------------------------------------------
 include(GNUInstallDirs)
 
-install(TARGETS ldns
+install(TARGETS ldns ldns-cli
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     COMPONENT Application
 )

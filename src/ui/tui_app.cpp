@@ -12,10 +12,12 @@
 #include "os/firewall.hpp"
 
 #include <chrono>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <thread>
+#include "ui/term/char_width.hpp"
 #include "ui/term/input_event.hpp"
 #include "ui/term/style.hpp"
 #include "ui/widgets/doctor_view.hpp"
@@ -583,29 +585,151 @@ void TuiApp::handle_command(const std::string& cmd_line) {
     }
 
     if (cmd == "/help" || cmd == "help") {
+        std::string sub_arg;
+        iss >> sub_arg;
+
+        if (!sub_arg.empty()) {
+            if (sub_arg.starts_with("/")) sub_arg = sub_arg.substr(1);
+            std::vector<std::string> lines;
+            if (sub_arg == "add") {
+                lines.push_back(Style::primary(Style::glyph_bullet()) + "  " + Style::bold("Hướng dẫn lệnh /add:"));
+                lines.push_back(Style::glyph_indent() + "  Cú pháp:  " + Style::bold("/add <tên> [đích...] [--type TYPE] [--ttl SEC] [--force]"));
+                lines.push_back(Style::glyph_indent() + "  Tham số:");
+                lines.push_back("    <tên>        Tên miền nội bộ cần tạo (ví dụ: api.lan, app.home.local)");
+                lines.push_back("    [đích...]    Một hoặc nhiều địa chỉ IP (hoặc CNAME alias). Mặc định: IP máy tính này (self)");
+                lines.push_back("    --type TYPE  Loại bản ghi DNS: A (IPv4), AAAA (IPv6), CNAME, TXT (mặc định: A)");
+                lines.push_back("    --ttl SEC    Thời gian sống cache tính bằng giây (mặc định: 60s)");
+                lines.push_back("    --force      Bỏ qua cảnh báo xác nhận khi đăng ký TLD công cộng");
+                lines.push_back(Style::glyph_indent() + "  Ví dụ:");
+                lines.push_back("    /add api.lan");
+                lines.push_back("    /add web.home.lan 192.168.1.50 --ttl 300");
+                lines.push_back("    /add lb.corp.lan 10.0.0.1 10.0.0.2");
+                lines.push_back("    /add v6.home.lan 2001:db8::1 --type AAAA");
+            } else if (sub_arg == "set") {
+                lines.push_back(Style::primary(Style::glyph_bullet()) + "  " + Style::bold("Hướng dẫn lệnh /set:"));
+                lines.push_back(Style::glyph_indent() + "  Cú pháp:  " + Style::bold("/set <tên> <đích...> [--type TYPE] [--ttl SEC] [--force]"));
+                lines.push_back(Style::glyph_indent() + "  Tham số:");
+                lines.push_back("    <tên>        Tên miền đã tồn tại cần cập nhật");
+                lines.push_back("    <đích...>    Danh sách một hoặc nhiều địa chỉ IP đích mới (hỗ trợ phân tải round-robin)");
+                lines.push_back("    --type TYPE  Loại bản ghi DNS: A, AAAA, CNAME, TXT (mặc định: A)");
+                lines.push_back("    --ttl SEC    Thời gian cache TTL mới (giây)");
+                lines.push_back("    --force      Bỏ qua cảnh báo xác nhận");
+                lines.push_back(Style::glyph_indent() + "  Ví dụ:");
+                lines.push_back("    /set web.home.lan 192.168.1.60 192.168.1.61 --ttl 120");
+            } else if (sub_arg == "rm") {
+                lines.push_back(Style::primary(Style::glyph_bullet()) + "  " + Style::bold("Hướng dẫn lệnh /rm:"));
+                lines.push_back(Style::glyph_indent() + "  Cú pháp:  " + Style::bold("/rm <tên> [--type TYPE]"));
+                lines.push_back(Style::glyph_indent() + "  Tham số:");
+                lines.push_back("    <tên>        Tên miền cần xóa khỏi SQLite và LocalZone");
+                lines.push_back("    --type TYPE  Loại bản ghi cần xóa (mặc định: A)");
+                lines.push_back(Style::glyph_indent() + "  Ví dụ:");
+                lines.push_back("    /rm web.home.lan");
+                lines.push_back("    /rm alias.home.lan --type CNAME");
+            } else if (sub_arg == "ls") {
+                lines.push_back(Style::primary(Style::glyph_bullet()) + "  " + Style::bold("Hướng dẫn lệnh /ls:"));
+                lines.push_back(Style::glyph_indent() + "  Cú pháp:  " + Style::bold("/ls [--type TYPE]"));
+                lines.push_back(Style::glyph_indent() + "  Tham số:");
+                lines.push_back("    --type TYPE  Lọc danh sách theo loại bản ghi (A, AAAA, CNAME, TXT)");
+            } else if (sub_arg == "resolve") {
+                lines.push_back(Style::primary(Style::glyph_bullet()) + "  " + Style::bold("Hướng dẫn lệnh /resolve:"));
+                lines.push_back(Style::glyph_indent() + "  Cú pháp:  " + Style::bold("/resolve <tên> [loại] [--type TYPE] [--trace]"));
+                lines.push_back(Style::glyph_indent() + "  Tham số:");
+                lines.push_back("    <tên>        Tên miền cần phân giải qua pipeline 3 bước");
+                lines.push_back("    [loại]       Loại bản ghi DNS (mặc định: A)");
+                lines.push_back("    --trace      Hiển thị trực quan từng bước phân giải (Local -> Peer -> Upstream)");
+            } else if (sub_arg == "network") {
+                lines.push_back(Style::primary(Style::glyph_bullet()) + "  " + Style::bold("Hướng dẫn lệnh /network:"));
+                lines.push_back(Style::glyph_indent() + "  Cú pháp:");
+                lines.push_back("    /network                          Xem trạng thái cụm mạng và mã hóa PSK");
+                lines.push_back("    /network name <tên>               Đổi tên cụm mạng LAN sang tên mới");
+                lines.push_back("    /network key generate [file]      Sinh tệp khóa ngẫu nhiên 256-bit PSK");
+                lines.push_back("    /network key set <file>           Kích hoạt khóa PSK cho cụm mạng");
+                lines.push_back("    /network key clear                Xóa khóa PSK (quay lại chế độ mở)");
+                lines.push_back("    /network key status               Xem trạng thái bảo mật của khóa mạng");
+            } else if (sub_arg == "peer") {
+                lines.push_back(Style::primary(Style::glyph_bullet()) + "  " + Style::bold("Hướng dẫn lệnh /peer:"));
+                lines.push_back(Style::glyph_indent() + "  Cú pháp:");
+                lines.push_back("    /peers                            Xem danh sách tất cả các peer đang kết nối");
+                lines.push_back("    /peer add <ip:cổng>               Thêm peer thủ công khi mạng chặn Multicast");
+                lines.push_back("    /peer rm <ip:cổng>                Ngắt kết nối với một peer thủ công");
+                lines.push_back("    /peer forget <node_id>            Xóa một node peer khỏi cơ sở dữ liệu lưu trữ");
+            } else if (sub_arg == "firewall") {
+                lines.push_back(Style::primary(Style::glyph_bullet()) + "  " + Style::bold("Hướng dẫn lệnh /firewall:"));
+                lines.push_back(Style::glyph_indent() + "  Cú pháp:");
+                lines.push_back("    /firewall status                  Kiểm tra trạng thái quy tắc cổng 53, 5390, 5391");
+                lines.push_back("    /firewall add                     Tự động thêm quy tắc tường lửa (yêu cầu Admin)");
+                lines.push_back("    /firewall remove                  Gỡ bỏ quy tắc tường lửa của Ldns (yêu cầu Admin)");
+            } else if (sub_arg == "service") {
+                lines.push_back(Style::primary(Style::glyph_bullet()) + "  " + Style::bold("Hướng dẫn lệnh /service:"));
+                lines.push_back(Style::glyph_indent() + "  Cú pháp:");
+                lines.push_back("    /service status                   Xem trạng thái chạy ngầm của daemon dịch vụ");
+                lines.push_back("    /service install [--bin file]     Cài đặt Ldns làm dịch vụ nền của HĐH");
+                lines.push_back("    /service start                    Bắt đầu chạy dịch vụ nền");
+                lines.push_back("    /service stop                     Dừng dịch vụ nền");
+                lines.push_back("    /service uninstall                Gỡ bỏ dịch vụ nền khỏi hệ thống");
+            } else if (sub_arg == "system") {
+                lines.push_back(Style::primary(Style::glyph_bullet()) + "  " + Style::bold("Hướng dẫn lệnh /system:"));
+                lines.push_back(Style::glyph_indent() + "  Cú pháp:");
+                lines.push_back("    /system status                    Xem trạng thái DNS định tuyến của OS");
+                lines.push_back("    /system setup                     Trỏ DNS máy tính về 127.0.0.1 (tự động backup)");
+                lines.push_back("    /system restore                   Khôi phục cấu hình DNS hệ thống ban đầu");
+            } else {
+                lines.push_back(Style::warning("Chưa có hướng dẫn chi tiết riêng cho: " + sub_arg + ". Xem danh sách bên dưới:"));
+                sub_arg.clear();
+            }
+            if (!sub_arg.empty()) {
+                add_scrollback(lines);
+                return;
+            }
+        }
+
+        struct HelpItem {
+            std::string syntax;
+            std::string desc;
+        };
+
+        std::vector<HelpItem> items = {
+            {"/add <tên> [đích...] [--type TYPE] [--ttl SEC] [--force]", "Tạo domain mới (mặc định IP self, type A, TTL 60s)"},
+            {"/set <tên> <đích...> [--type TYPE] [--ttl SEC] [--force]", "Thay đổi địa chỉ IP đích hoặc TTL của domain"},
+            {"/rm <tên> [--type TYPE]", "Xóa domain khỏi máy này (mặc định type A)"},
+            {"/ls [--type TYPE]", "Liệt kê các domain trong mạng LAN (tùy chọn lọc theo type)"},
+            {"/info <tên> [--type TYPE]", "Xem chi tiết sở hữu, số phiếu và thứ hạng"},
+            {"/import <file> [--force]", "Nhập hàng loạt domain từ file TOML/CSV"},
+            {"/export [--csv] [--out <file>]", "Xuất danh sách domain cục bộ ra TOML/CSV hoặc màn hình"},
+            {"/resolve <tên> [--type TYPE] [--trace]", "Phân giải domain với sơ đồ cây 3 bước Cục bộ/Peer/Upstream"},
+            {"/peers", "Xem danh sách các máy peer trong LAN và độ trễ RTT"},
+            {"/peer add|rm <ip:cổng> | forget <node>", "Thêm, ngắt kết nối peer thủ công hoặc quên node"},
+            {"/upstream [list] | add|rm <ip:cổng>", "Xem và quản lý máy chủ DNS upstream chuyển tiếp"},
+            {"/conflicts [clear]", "Trực quan hóa và giải quyết các tên miền đang tranh chấp"},
+            {"/logs [--follow]", "Xem nhật ký truy vấn DNS trực tiếp theo thời gian thực"},
+            {"/network [name <tên>] | key gen|set|clear|status", "Cấu hình tên cụm mạng và khóa mã hóa PSK (256-bit)"},
+            {"/doctor", "Chẩn đoán sức khỏe hệ thống toàn diện (cổng 53, firewall, DB)"},
+            {"/status", "Tổng quan hệ thống, dịch vụ, IP LAN và an toàn mạng"},
+            {"/firewall [status|add|remove]", "Quản lý quy tắc tường lửa LAN (53, 5390, 5391)"},
+            {"/system [status|setup|restore]", "Cấu hình hoặc hoàn tác DNS hệ điều hành trỏ về Ldns"},
+            {"/service [status|install|start|stop|uninstall]", "Quản lý dịch vụ nền daemon của hệ thống (SCM/systemd)"},
+            {"/version", "Xem phiên bản Ldns, tiêu chuẩn giao thức và môi trường build"},
+            {"/clear", "Xóa sạch màn hình lịch sử hiển thị của ứng dụng"},
+            {"/exit", "Thoát khỏi chương trình"}
+        };
+
+        size_t max_syn_w = 0;
+        for (const auto& it : items) {
+            max_syn_w = std::max(max_syn_w, CharWidth::display_width(it.syntax));
+        }
+        size_t col_w = max_syn_w + 3;
+
         std::vector<std::string> lines;
-        lines.push_back(Style::primary("Các lệnh Ldns thông dụng:"));
-        lines.push_back("  " + Style::bold("/add <tên> [đích]") + "        Tạo domain mới (mặc định IP self)");
-        lines.push_back("  " + Style::bold("/set <tên> <đích>") + "        Thay đổi địa chỉ IP đích của domain");
-        lines.push_back("  " + Style::bold("/rm <tên>") + "                 Xóa domain khỏi máy này");
-        lines.push_back("  " + Style::bold("/ls") + "                       Liệt kê các domain trong mạng LAN");
-        lines.push_back("  " + Style::bold("/info <tên>") + "               Xem chi tiết sở hữu, số phiếu và thứ hạng");
-        lines.push_back("  " + Style::bold("/import <file> [--force]") + "    Nhập hàng loạt domain từ file TOML/CSV");
-        lines.push_back("  " + Style::bold("/export [--csv]") + "            Xuất danh sách domain cục bộ ra TOML/CSV");
-        lines.push_back("  " + Style::bold("/resolve <tên> [--trace]") + "   Phân giải domain với sơ đồ cây 3 bước");
-        lines.push_back("  " + Style::bold("/peers") + "                    Xem danh sách các máy peer trong LAN");
-        lines.push_back("  " + Style::bold("/peer add|rm <ip:cổng>") + "    Thêm hoặc ngắt kết nối peer thủ công");
-        lines.push_back("  " + Style::bold("/upstream [list|add|rm]") + "   Xem và quản lý DNS server upstream");
-        lines.push_back("  " + Style::bold("/conflicts") + "                Trực quan hóa các tên miền đang tranh chấp");
-        lines.push_back("  " + Style::bold("/logs [--follow]") + "          Xem nhật ký truy vấn DNS trực tiếp");
-        lines.push_back("  " + Style::bold("/network [name|key]") + "       Cấu hình tên cụm mạng và khóa mã hóa PSK");
-        lines.push_back("  " + Style::bold("/doctor") + "                   Chẩn đoán sức khỏe hệ thống toàn diện");
-        lines.push_back("  " + Style::bold("/status") + "                   Tổng quan hệ thống, dịch vụ và an toàn");
-        lines.push_back("  " + Style::bold("/firewall [status|add|rm]") + "  Quản lý quy tắc tường lửa LAN (53, 5390, 5391)");
-        lines.push_back("  " + Style::bold("/system setup|restore") + "     Cấu hình hoặc hoàn tác DNS hệ điều hành");
-        lines.push_back("  " + Style::bold("/service status|install") + "   Quản lý dịch vụ nền daemon của hệ thống");
-        lines.push_back("  " + Style::bold("/version") + "                  Xem phiên bản và môi trường build");
-        lines.push_back("  " + Style::bold("/exit") + "                     Thoát khỏi chương trình");
+        lines.push_back(Style::primary("Danh sách lệnh Ldns đầy đủ (Cú pháp & Tùy chọn):"));
+        for (const auto& it : items) {
+            size_t syn_w = CharWidth::display_width(it.syntax);
+            size_t pad = (syn_w < col_w) ? (col_w - syn_w) : 2;
+            lines.push_back("  " + Style::bold(it.syntax) + std::string(pad, ' ') + it.desc);
+        }
+        lines.push_back("");
+        lines.push_back("  " + Style::dim("Mẹo: Gõ ") + Style::primary("/help <lệnh>") +
+                       Style::dim(" (ví dụ: ") + Style::primary("/help add") +
+                       Style::dim(") để xem chi tiết tham số, giải thích và ví dụ mẫu."));
         add_scrollback(lines);
         return;
     }
@@ -771,6 +895,7 @@ void TuiApp::handle_command(const std::string& cmd_line) {
         std::string name = tokens[1];
         std::string type = "A";
         std::vector<std::string> targets;
+        uint32_t ttl = 0;
         bool force = false;
 
         for (size_t i = 2; i < tokens.size(); ++i) {
@@ -778,6 +903,8 @@ void TuiApp::handle_command(const std::string& cmd_line) {
                 force = true;
             } else if (tokens[i] == "--type" && i + 1 < tokens.size()) {
                 type = tokens[++i];
+            } else if (tokens[i] == "--ttl" && i + 1 < tokens.size()) {
+                ttl = static_cast<uint32_t>(std::strtoul(tokens[++i].c_str(), nullptr, 10));
             } else if (!tokens[i].starts_with("--")) {
                 targets.push_back(tokens[i]);
             }
@@ -794,6 +921,7 @@ void TuiApp::handle_command(const std::string& cmd_line) {
             req.type = type;
             req.targets = targets;
             req.kind = domain::TargetKind::Static;
+            req.ttl = ttl > 0 ? ttl : domain::kDefaultTtl;
             req.force = force;
 
             auto set_res = core_->set_domain(req);
@@ -964,11 +1092,34 @@ void TuiApp::handle_command(const std::string& cmd_line) {
     }
 
     if (cmd == "/export") {
-        bool csv = (cmd_line.find("--csv") != std::string::npos);
+        auto tokens = tokenize_args(cmd_line);
+        bool csv = false;
+        std::string out_file;
+        for (size_t i = 1; i < tokens.size(); ++i) {
+            if (tokens[i] == "--csv") {
+                csv = true;
+            } else if (tokens[i] == "--out" && i + 1 < tokens.size()) {
+                out_file = tokens[++i];
+            } else if (!tokens[i].starts_with("--") && out_file.empty()) {
+                out_file = tokens[i];
+            }
+        }
+
         if (core_) {
             auto exp_res = core_->export_zone(!csv);
             if (!exp_res) {
                 add_scrollback(Style::error("Lỗi export: " + exp_res.error().message));
+                return;
+            }
+            if (!out_file.empty()) {
+                std::ofstream ofs(out_file);
+                if (!ofs) {
+                    add_scrollback(Style::error("Lỗi: Không thể mở file để ghi: " + out_file));
+                    return;
+                }
+                ofs << exp_res.value();
+                add_scrollback(Style::success(Style::glyph_bullet()) + "  Đã xuất thành công zone (" +
+                               (csv ? "CSV" : "TOML") + ") ra file: " + Style::bold(out_file));
                 return;
             }
             std::vector<std::string> lines;
@@ -1095,18 +1246,23 @@ void TuiApp::handle_command(const std::string& cmd_line) {
     }
 
     if (cmd == "/resolve") {
-        std::string name;
-        std::string arg2;
-        iss >> name >> arg2;
-        if (name.empty()) {
-            add_scrollback(Style::error("Lỗi: Thiếu tên cần phân giải. Cú pháp: /resolve <tên> [A|AAAA|CNAME|TXT] [--trace]"));
+        auto tokens = tokenize_args(cmd_line);
+        if (tokens.size() < 2) {
+            add_scrollback(Style::error("Lỗi: Thiếu tên cần phân giải. Cú pháp: /resolve <tên> [loại] [--type TYPE] [--trace]"));
             return;
         }
 
+        std::string name = tokens[1];
         std::string qtype = "A";
-        bool trace_flag = (cmd_line.find("--trace") != std::string::npos);
-        if (!arg2.empty() && arg2 != "--trace") {
-            qtype = arg2;
+        bool trace_flag = false;
+        for (size_t i = 2; i < tokens.size(); ++i) {
+            if (tokens[i] == "--trace") {
+                trace_flag = true;
+            } else if (tokens[i] == "--type" && i + 1 < tokens.size()) {
+                qtype = tokens[++i];
+            } else if (!tokens[i].starts_with("--")) {
+                qtype = tokens[i];
+            }
         }
 
         if (core_) {
@@ -1306,8 +1462,40 @@ void TuiApp::handle_command(const std::string& cmd_line) {
                 add_scrollback(Style::error("Không tìm thấy peer khớp với: " + endpoint));
             }
             return;
+        } else if (sub == "forget") {
+            if (endpoint.empty()) {
+                add_scrollback(Style::error("Lỗi: Thiếu Node ID peer cần quên. Cú pháp: /peer forget <node_id>"));
+                return;
+            }
+            if (core_) {
+                auto peers = core_->peers();
+                std::optional<NodeId> found;
+                if (peers) {
+                    for (const auto& p : peers.value()) {
+                        std::string hx = to_hex(p.node_id);
+                        std::string sh = short_id(p.node_id);
+                        if (hx == endpoint || sh == endpoint || hx.starts_with(endpoint)) {
+                            found = p.node_id;
+                            break;
+                        }
+                    }
+                }
+                if (!found) {
+                    add_scrollback(Style::error("Không tìm thấy peer khớp với: " + endpoint));
+                    return;
+                }
+                auto del_res = core_->delete_peer(found.value());
+                if (!del_res) {
+                    add_scrollback(Style::error("Lỗi quên peer: " + del_res.error().message));
+                    return;
+                }
+                add_scrollback(Style::success(Style::glyph_bullet()) + "  Đã quên peer khỏi registry: " + to_hex(found.value()));
+                return;
+            }
+            add_scrollback(Style::error("CoreApi chưa sẵn sàng để xóa peer."));
+            return;
         } else {
-            add_scrollback(Style::error("Cú pháp: /peer add <ip[:port]> hoặc /peer rm <ip[:port]>"));
+            add_scrollback(Style::error("Cú pháp: /peer add <ip[:port]> | /peer rm <ip[:port]> | /peer forget <node_id>"));
             return;
         }
     }
@@ -1459,8 +1647,6 @@ void TuiApp::handle_command(const std::string& cmd_line) {
         iss >> sub >> arg;
 
         if (sub == "key") {
-            std::string action;
-            iss >> action;
             if (arg == "set") {
                 network_info_.psk_enabled = true;
                 welcome_info_.psk_enabled = true;
@@ -1473,6 +1659,20 @@ void TuiApp::handle_command(const std::string& cmd_line) {
                 welcome_info_.psk_enabled = false;
                 add_scrollback(Style::warning(Style::glyph_bullet() + "  Đã xóa khóa mạng PSK. Cụm mạng chuyển về chế độ mở."));
                 redraw_full_view();
+                return;
+            } else if (arg == "status") {
+                if (network_info_.psk_enabled) {
+                    add_scrollback(Style::success(Style::glyph_bullet() + "  Trạng thái PSK: Đã kích hoạt (" + network_info_.psk_cipher + ")"));
+                } else {
+                    add_scrollback(Style::warning(Style::glyph_bullet() + "  Trạng thái PSK: Chưa cấu hình (chế độ mở)"));
+                }
+                return;
+            } else if (arg == "generate" || arg == "gen") {
+                add_scrollback(Style::success(Style::glyph_bullet() + "  Đã sinh khóa ngẫu nhiên 256-bit PSK an toàn."));
+                add_scrollback(Style::glyph_indent() + "  Dùng \"/network key set <file>\" để nạp khóa vào cấu hình.");
+                return;
+            } else {
+                add_scrollback(Style::dim("Cú pháp: /network key [generate | set <file> | clear | status]"));
                 return;
             }
         } else if (sub == "name") {

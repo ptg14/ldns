@@ -2,13 +2,12 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'feat/**', 'fix/**']
   pull_request:
+    branches: [main, 'feat/**']
   workflow_dispatch:
 
-# Cancel superseded PR runs, but let every push to main produce a complete CI
-# record (cancelling on main hides results for commits that were pushed in
-# quick succession).
+# Cancel superseded PR runs, but let every push to main produce a complete CI record.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -22,11 +21,9 @@ jobs:
       matrix:
         preset: [linux-debug, linux-asan]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
 
-      # Always clone our own vcpkg: the preinstalled one on the runner may not
-      # contain the commit named by vcpkg.json's builtin-baseline, which fails
-      # with "failed to git show versions/baseline.json".
+      # Always clone our own vcpkg to ensure baseline reproducibility
       - name: Set up vcpkg
         run: |
           git clone https://github.com/microsoft/vcpkg.git "$RUNNER_TEMP/vcpkg"
@@ -41,25 +38,30 @@ jobs:
       - name: Configure
         run: cmake --preset ${{ matrix.preset }}
 
-      - name: Build
+      - name: Build (CLI & TUI)
         run: cmake --build --preset ${{ matrix.preset }}
 
-      - name: Test
-        run: ctest --preset ${{ matrix.preset }}
+      - name: Test (Unit & Integration Tests)
+        run: ctest --preset ${{ matrix.preset }} --output-on-failure
+
+      - name: Verify CLI & TUI Binaries
+        run: |
+          BIN_DIR="build/${{ matrix.preset }}"
+          echo "Verifying TUI binary ($BIN_DIR/ldns)..."
+          "$BIN_DIR/ldns" --version
+          echo "Verifying CLI binary ($BIN_DIR/ldns-cli)..."
+          "$BIN_DIR/ldns-cli" --version
+          "$BIN_DIR/ldns-cli" --help | head -n 15
 
   windows:
     name: Windows (${{ matrix.preset }})
-    # windows-latest currently maps to the VS 2026 image, which has no
-    # "Visual Studio 17 2022" generator. The windows-ci preset uses Ninja with
-    # whichever MSVC environment msvc-dev-cmd activates, so it does not depend
-    # on the installed Visual Studio version.
     runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
         preset: [windows-ci]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
 
       - name: Set up vcpkg
         shell: pwsh
@@ -96,8 +98,18 @@ jobs:
       - name: Configure
         run: cmake --preset ${{ matrix.preset }}
 
-      - name: Build
+      - name: Build (CLI & TUI)
         run: cmake --build --preset ${{ matrix.preset }}
 
-      - name: Test
-        run: ctest --preset ${{ matrix.preset }}
+      - name: Test (Unit & Integration Tests)
+        run: ctest --preset ${{ matrix.preset }} --output-on-failure
+
+      - name: Verify CLI & TUI Binaries
+        shell: pwsh
+        run: |
+          $binDir = "build/${{ matrix.preset }}"
+          Write-Host "Verifying TUI binary ($binDir/ldns.exe)..."
+          & "$binDir/ldns.exe" --version
+          Write-Host "Verifying CLI binary ($binDir/ldns-cli.exe)..."
+          & "$binDir/ldns-cli.exe" --version
+          & "$binDir/ldns-cli.exe" --help | Select-Object -First 15

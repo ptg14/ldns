@@ -27,7 +27,15 @@
 #include "core/runtime/runtime.hpp"
 #include "core/util/logger.hpp"
 #include "core/version.hpp"
+
+#ifndef LDNS_ENABLE_UI
+#define LDNS_ENABLE_UI 1
+#endif
+
+#if LDNS_ENABLE_UI
 #include "ui/tui_app.hpp"
+#endif
+
 #include "ipc/ipc_server.hpp"
 #include "ipc/ipc_client.hpp"
 #include "os/doctor.hpp"
@@ -536,6 +544,7 @@ int main(int argc, char** argv) {
     if (command == "daemon") return run_daemon(global, options.foreground);
     if (!command.empty()) return run_command(command, global, options, list_type, peer_subaction);
 
+#if LDNS_ENABLE_UI
     if (headless) {
         ldns::logger()->info("ldns {} - running headless", ldns::version_string());
         return cli::kExitOk;
@@ -551,4 +560,9 @@ int main(int argc, char** argv) {
     }
     ldns::ui::TuiApp tui(std::move(core));
     return tui.run();
+#else
+    (void)headless;
+    std::cout << app.help() << '\n';
+    return cli::kExitOk;
+#endif
 }

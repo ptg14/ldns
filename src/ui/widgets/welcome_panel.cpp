@@ -28,19 +28,6 @@ std::vector<std::string> WelcomePanel::render(const WelcomeInfo& info, size_t bo
     lines.push_back(header);
     lines.push_back("");
 
-    // Quick tips
-    if (inner_width >= 62) {
-        std::string tips = "   " + Style::primary("/help") + Style::dim(" để xem lệnh · ") +
-                           Style::primary("/add app.lan") + Style::dim(" để tạo domain đầu tiên");
-        lines.push_back(tips);
-    } else if (inner_width >= 36) {
-        lines.push_back("   " + Style::primary("/help") + Style::dim(" để xem danh sách lệnh"));
-        lines.push_back("   " + Style::primary("/add app.lan") + Style::dim(" tạo domain đầu tiên"));
-    } else {
-        lines.push_back("   " + Style::primary("/help") + Style::dim(" xem lệnh"));
-    }
-    lines.push_back("");
-
     // Clean node ID (extract alphanumeric hex ID, avoid broken multi-byte UTF-8 substrings)
     std::string clean_id;
     for (char c : info.node_id) {

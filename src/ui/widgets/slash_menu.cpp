@@ -31,6 +31,7 @@ SlashMenu::SlashMenu() {
         {"/doctor", "/doctor", "Chẩn đoán cổng 53, firewall, quyền, multicast"},
         {"/help", "/help", "Xem danh sách và hướng dẫn sử dụng lệnh"},
         {"/version", "/version", "Xem thông tin phiên bản Ldns"},
+        {"/clear", "/clear", "Xóa sạch màn hình scrollback"},
         {"/exit", "/exit", "Thoát khỏi chương trình"}
     };
 
@@ -42,14 +43,17 @@ SlashMenu::SlashMenu() {
 
         // /network
         {"name", "/network name", "/network name <tên>", "Đổi tên cụm mạng LAN sang tên mới"},
+        {"key generate", "/network key generate", "/network key generate", "Sinh tệp khóa ngẫu nhiên 256-bit PSK an toàn"},
         {"key set", "/network key set", "/network key set", "Kích hoạt mã hóa khóa mạng PSK AES-256-GCM"},
         {"key clear", "/network key clear", "/network key clear", "Xóa khóa mạng PSK, đưa cụm mạng về chế độ mở"},
+        {"key status", "/network key status", "/network key status", "Xem trạng thái bảo mật của khóa mạng PSK"},
 
         // /service
         {"status", "/service status", "/service status", "Xem trạng thái dịch vụ nền (LdnsService / ldns.service)"},
         {"install", "/service install", "/service install", "Hộp thoại cài đặt dịch vụ tự khởi động cùng hệ thống"},
         {"start", "/service start", "/service start", "Bắt đầu chạy dịch vụ daemon nền"},
         {"stop", "/service stop", "/service stop", "Dừng dịch vụ daemon nền"},
+        {"uninstall", "/service uninstall", "/service uninstall", "Gỡ bỏ dịch vụ daemon nền khỏi hệ thống"},
 
         // /system
         {"status", "/system status", "/system status", "Xem trạng thái cấu hình DNS hệ điều hành và metadata"},
@@ -87,7 +91,19 @@ SlashMenu::SlashMenu() {
         {"--force", "/import --force", "/import <file> --force", "Ghi đè domain khi phát hiện xung đột lúc import"},
 
         // /export
-        {"--csv", "/export --csv", "/export --csv", "Xuất danh sách domain ra định dạng file CSV"}
+        {"--csv", "/export --csv", "/export --csv", "Xuất danh sách domain ra định dạng file CSV"},
+        {"--out", "/export --out", "/export --out <file>", "Xuất danh sách domain ra file chỉ định"},
+
+        // /help
+        {"add", "/help add", "/help add", "Xem hướng dẫn chi tiết tham số và ví dụ /add"},
+        {"set", "/help set", "/help set", "Xem hướng dẫn chi tiết tham số và ví dụ /set"},
+        {"rm", "/help rm", "/help rm", "Xem hướng dẫn chi tiết tham số và ví dụ /rm"},
+        {"network", "/help network", "/help network", "Xem hướng dẫn chi tiết mạng và khóa PSK"},
+        {"service", "/help service", "/help service", "Xem hướng dẫn chi tiết dịch vụ nền"},
+        {"system", "/help system", "/help system", "Xem hướng dẫn chi tiết DNS hệ thống"},
+        {"firewall", "/help firewall", "/help firewall", "Xem hướng dẫn chi tiết tường lửa LAN"},
+        {"resolve", "/help resolve", "/help resolve", "Xem hướng dẫn chi tiết phân giải và trace"},
+        {"peer", "/help peer", "/help peer", "Xem hướng dẫn chi tiết quản lý peer P2P"}
     };
 
     filtered_ = commands_;

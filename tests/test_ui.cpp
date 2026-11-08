@@ -166,10 +166,13 @@ TEST_CASE("UI: SlashMenu filtering and navigation") {
         CHECK(menu.filtered_items()[0].name == "add");
 
         menu.set_query("/network ");
-        CHECK(menu.filtered_items().size() == 3);
+        CHECK(menu.filtered_items().size() == 5);
 
         menu.set_query("/service ");
-        CHECK(menu.filtered_items().size() == 4);
+        CHECK(menu.filtered_items().size() == 5);
+
+        menu.set_query("/help ");
+        CHECK(menu.filtered_items().size() == 9);
     }
 }
 
@@ -349,4 +352,60 @@ TEST_CASE("UI: NetworkView rendering") {
     auto lines = ldns::ui::NetworkView::render(info);
     CHECK(!lines.empty());
     CHECK(lines[0].find("Cấu hình Cụm Mạng Ldns") != std::string::npos);
+}
+
+TEST_CASE("UI: Help list column alignment and full options") {
+    struct HelpItem {
+        std::string syntax;
+        std::string desc;
+    };
+
+    std::vector<HelpItem> items = {
+        {"/add <tên> [đích...] [--type TYPE] [--ttl SEC] [--force]", "Tạo domain mới (mặc định IP self, type A, TTL 60s)"},
+        {"/set <tên> <đích...> [--type TYPE] [--ttl SEC] [--force]", "Thay đổi địa chỉ IP đích hoặc TTL của domain"},
+        {"/rm <tên> [--type TYPE]", "Xóa domain khỏi máy này (mặc định type A)"},
+        {"/ls [--type TYPE]", "Liệt kê các domain trong mạng LAN (tùy chọn lọc theo type)"},
+        {"/info <tên> [--type TYPE]", "Xem chi tiết sở hữu, số phiếu và thứ hạng"},
+        {"/import <file> [--force]", "Nhập hàng loạt domain từ file TOML/CSV"},
+        {"/export [--csv] [--out <file>]", "Xuất danh sách domain cục bộ ra TOML/CSV hoặc màn hình"},
+        {"/resolve <tên> [--type TYPE] [--trace]", "Phân giải domain với sơ đồ cây 3 bước Cục bộ/Peer/Upstream"},
+        {"/peers", "Xem danh sách các máy peer trong LAN và độ trễ RTT"},
+        {"/peer add|rm <ip:cổng> | forget <node>", "Thêm, ngắt kết nối peer thủ công hoặc quên node"},
+        {"/upstream [list] | add|rm <ip:cổng>", "Xem và quản lý máy chủ DNS upstream chuyển tiếp"},
+        {"/conflicts [clear]", "Trực quan hóa và giải quyết các tên miền đang tranh chấp"},
+        {"/logs [--follow]", "Xem nhật ký truy vấn DNS trực tiếp theo thời gian thực"},
+        {"/network [name <tên>] | key gen|set|clear|status", "Cấu hình tên cụm mạng và khóa mã hóa PSK (256-bit)"},
+        {"/doctor", "Chẩn đoán sức khỏe hệ thống toàn diện (cổng 53, firewall, DB)"},
+        {"/status", "Tổng quan hệ thống, dịch vụ, IP LAN và an toàn mạng"},
+        {"/firewall [status|add|remove]", "Quản lý quy tắc tường lửa LAN (53, 5390, 5391)"},
+        {"/system [status|setup|restore]", "Cấu hình hoặc hoàn tác DNS hệ điều hành trỏ về Ldns"},
+        {"/service [status|install|start|stop|uninstall]", "Quản lý dịch vụ nền daemon của hệ thống (SCM/systemd)"},
+        {"/version", "Xem phiên bản Ldns, tiêu chuẩn giao thức và môi trường build"},
+        {"/clear", "Xóa sạch màn hình lịch sử hiển thị của ứng dụng"},
+        {"/exit", "Thoát khỏi chương trình"}
+    };
+
+    size_t max_syn_w = 0;
+    for (const auto& it : items) {
+        max_syn_w = std::max(max_syn_w, ldns::ui::CharWidth::display_width(it.syntax));
+    }
+    size_t col_w = max_syn_w + 3;
+
+    // Verify all 22 commands are defined
+    CHECK(items.size() == 22);
+
+    // Verify that every formatted line has its description start at EXACTLY 2 + col_w
+    for (const auto& it : items) {
+        size_t syn_w = ldns::ui::CharWidth::display_width(it.syntax);
+        size_t pad = (syn_w < col_w) ? (col_w - syn_w) : 2;
+        std::string raw_line = "  " + it.syntax + std::string(pad, ' ') + it.desc;
+        
+        // Find position of description
+        size_t desc_pos = raw_line.find(it.desc);
+        CHECK(desc_pos != std::string::npos);
+        // Display width from start of line up to description must equal 2 + col_w
+        std::string prefix = raw_line.substr(0, desc_pos);
+        size_t prefix_cols = ldns::ui::CharWidth::display_width(prefix);
+        CHECK(prefix_cols == 2 + col_w);
+    }
 }

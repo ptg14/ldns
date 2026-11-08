@@ -53,7 +53,7 @@ public:
 
 private:
     std::string text_;
-    std::string placeholder_ = "Thử \"/add myapp.lan\" hoặc gõ \"/\"...";
+    std::string placeholder_ = "/help để xem lệnh";
     size_t cursor_pos_ = 0;
 
     std::vector<std::string> history_;
