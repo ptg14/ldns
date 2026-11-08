@@ -25,13 +25,14 @@ void Dialog::move_down() {
     }
 }
 
-void Dialog::select_num(int num) {
+bool Dialog::select_num(int num) {
     for (size_t i = 0; i < options_.size(); ++i) {
         if (options_[i].key_num == num) {
             selected_idx_ = i;
-            break;
+            return true;
         }
     }
+    return false;
 }
 
 int Dialog::selected_num() const {

@@ -2,21 +2,31 @@
 
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace ldns::ui {
 
 struct CommandDesc {
-    std::string name;        // e.g. "/add"
-    std::string syntax;      // e.g. "/add <tên> [đích…]"
-    std::string description; // e.g. "Tạo domain (đích mặc định self)"
+    std::string name;        // e.g. "/firewall" or "status" (label in menu)
+    std::string completion;  // e.g. "/firewall" or "/firewall status" (inserted into input box)
+    std::string syntax;      // e.g. "/firewall status"
+    std::string description; // e.g. "Xem trạng thái các cổng tường lửa LAN"
+
+    CommandDesc() = default;
+
+    CommandDesc(std::string n, std::string syn, std::string desc)
+        : name(n), completion(std::move(n)), syntax(std::move(syn)), description(std::move(desc)) {}
+
+    CommandDesc(std::string n, std::string comp, std::string syn, std::string desc)
+        : name(std::move(n)), completion(std::move(comp)), syntax(std::move(syn)), description(std::move(desc)) {}
 };
 
 class SlashMenu {
 public:
     SlashMenu();
 
-    // Set filter query (e.g. "/re")
+    // Set filter query (e.g. "/re", "/firewall ", "/network key")
     void set_query(std::string_view query);
 
     // Get current filtered list
@@ -35,6 +45,7 @@ public:
 
 private:
     std::vector<CommandDesc> commands_;
+    std::vector<CommandDesc> subcommands_;
     std::vector<CommandDesc> filtered_;
     size_t selected_index_ = 0;
 };

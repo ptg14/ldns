@@ -9,6 +9,7 @@
 #include "core/resolver/query_log.hpp"
 #include "core/util/id.hpp"
 #include "core/version.hpp"
+#include "os/firewall.hpp"
 
 #include <chrono>
 #include <iomanip>
@@ -116,6 +117,7 @@ TuiApp::TuiApp(std::unique_ptr<CoreApi> core)
     welcome_info_.ip_address = "192.168.1.10";
     welcome_info_.dns_port = ":53";
     welcome_info_.dns_active = true;
+    welcome_info_.psk_enabled = network_info_.psk_enabled;
 
     if (core_) {
         auto st = core_->status();
@@ -127,6 +129,7 @@ TuiApp::TuiApp(std::unique_ptr<CoreApi> core)
         stats_.domain_count = st.domain_count;
         network_info_.network_name = st.network_name;
         network_info_.psk_enabled = st.psk_configured && st.psk_key_file_found;
+        welcome_info_.psk_enabled = network_info_.psk_enabled;
 
         // Sync local domain entries from CoreApi
         auto list_res = core_->list_domains();
@@ -153,6 +156,9 @@ TuiApp::TuiApp(std::unique_ptr<CoreApi> core)
 }
 
 TuiApp::~TuiApp() {
+    if (core_) {
+        core_->set_event_handler(nullptr);
+    }
     renderer_.clear_dynamic_zone();
     term_.disable_raw_mode();
 }
@@ -388,12 +394,13 @@ int TuiApp::run() {
             } else if (ev.type == KeyType::Character) {
                 if (ev.text >= "1" && ev.text <= "9") {
                     int num = ev.text[0] - '0';
-                    active_dialog_->select_num(num);
-                    int chosen = active_dialog_->selected_num();
-                    active_dialog_->close();
-                    active_dialog_.reset();
-                    renderer_.print_scrollback_line(Style::success("⏺  Đã chọn mục " + std::to_string(chosen) + " - Đang áp dụng thiết lập..."));
-                    render_all();
+                    if (active_dialog_->select_num(num)) {
+                        int chosen = active_dialog_->selected_num();
+                        active_dialog_->close();
+                        active_dialog_.reset();
+                        renderer_.print_scrollback_line(Style::success("⏺  Đã chọn mục " + std::to_string(chosen) + " - Đang áp dụng thiết lập..."));
+                        render_all();
+                    }
                     continue;
                 }
             } else if (ev.type == KeyType::Enter) {
@@ -416,30 +423,22 @@ int TuiApp::run() {
                 slash_menu_.move_selection_down();
                 render_all();
                 continue;
-            } else if (ev.type == KeyType::Tab) {
+            } else if (ev.type == KeyType::Tab || ev.type == KeyType::Enter) {
                 const auto* cmd = slash_menu_.selected_command();
                 if (cmd) {
-                    input_box_.set_text(cmd->name + " ");
-                }
-                show_slash_menu_ = false;
-                render_all();
-                continue;
-            } else if (ev.type == KeyType::Enter) {
-                const auto* cmd = slash_menu_.selected_command();
-                std::string chosen_cmd;
-                if (cmd && !input_box_.text().empty() && input_box_.text().find(' ') == std::string::npos) {
-                    chosen_cmd = cmd->name;
+                    input_box_.set_text(cmd->completion + " ");
+                    slash_menu_.set_query(input_box_.text());
+                    show_slash_menu_ = !slash_menu_.filtered_items().empty();
+                    render_all();
+                    continue;
                 } else {
-                    chosen_cmd = input_box_.text();
+                    show_slash_menu_ = false;
+                    if (ev.type == KeyType::Tab) {
+                        render_all();
+                        continue;
+                    }
+                    // For Enter with no command selected, fall through to execute input_box_.text()
                 }
-                show_slash_menu_ = false;
-                input_box_.add_to_history(chosen_cmd);
-                input_box_.clear();
-                if (!chosen_cmd.empty()) {
-                    handle_command(chosen_cmd);
-                }
-                render_all();
-                continue;
             } else if (ev.type == KeyType::Esc) {
                 show_slash_menu_ = false;
                 render_all();
@@ -455,9 +454,9 @@ int TuiApp::run() {
                     break;
                 }
                 const std::string& cur_text = input_box_.text();
-                if (!cur_text.empty() && cur_text[0] == '/' && cur_text.find(' ') == std::string::npos) {
-                    show_slash_menu_ = true;
+                if (!cur_text.empty() && cur_text[0] == '/') {
                     slash_menu_.set_query(cur_text);
+                    show_slash_menu_ = !slash_menu_.filtered_items().empty();
                 } else {
                     show_slash_menu_ = false;
                 }
@@ -469,9 +468,9 @@ int TuiApp::run() {
                     break;
                 }
                 const std::string& cur_text = input_box_.text();
-                if (!cur_text.empty() && cur_text[0] == '/' && cur_text.find(' ') == std::string::npos) {
-                    show_slash_menu_ = true;
+                if (!cur_text.empty() && cur_text[0] == '/') {
                     slash_menu_.set_query(cur_text);
+                    show_slash_menu_ = !slash_menu_.filtered_items().empty();
                 } else {
                     show_slash_menu_ = false;
                 }
@@ -504,9 +503,9 @@ int TuiApp::run() {
             case KeyType::Tab:
                 if (input_box_.is_search_mode()) {
                     input_box_.accept_search();
-                } else if (!input_box_.text().empty() && input_box_.text()[0] == '/' && input_box_.text().find(' ') == std::string::npos) {
-                    show_slash_menu_ = true;
+                } else if (!input_box_.text().empty() && input_box_.text()[0] == '/') {
                     slash_menu_.set_query(input_box_.text());
+                    show_slash_menu_ = !slash_menu_.filtered_items().empty();
                 }
                 break;
             case KeyType::Esc:
@@ -576,9 +575,10 @@ void TuiApp::handle_command(const std::string& cmd_line) {
 
     if (cmd == "/clear" || cmd == "clear") {
         scrollback_entries_.clear();
+        scrollback_entries_.push_back({true, {}});
         std::cout << "\033[2J\033[1;1H" << std::flush;
         renderer_.reset();
-        render_all();
+        redraw_full_view();
         return;
     }
 
@@ -601,6 +601,7 @@ void TuiApp::handle_command(const std::string& cmd_line) {
         lines.push_back("  " + Style::bold("/network [name|key]") + "       Cấu hình tên cụm mạng và khóa mã hóa PSK");
         lines.push_back("  " + Style::bold("/doctor") + "                   Chẩn đoán sức khỏe hệ thống toàn diện");
         lines.push_back("  " + Style::bold("/status") + "                   Tổng quan hệ thống, dịch vụ và an toàn");
+        lines.push_back("  " + Style::bold("/firewall [status|add|rm]") + "  Quản lý quy tắc tường lửa LAN (53, 5390, 5391)");
         lines.push_back("  " + Style::bold("/system setup|restore") + "     Cấu hình hoặc hoàn tác DNS hệ điều hành");
         lines.push_back("  " + Style::bold("/service status|install") + "   Quản lý dịch vụ nền daemon của hệ thống");
         lines.push_back("  " + Style::bold("/version") + "                  Xem phiên bản và môi trường build");
@@ -630,14 +631,16 @@ void TuiApp::handle_command(const std::string& cmd_line) {
             auto st = core_->status();
             lines.push_back(Style::primary(Style::glyph_bullet()) + "  " + Style::bold("Tổng quan Ldns Node") +
                            " (node: " + st.short_id + " · epoch " + std::to_string(st.epoch) + " · seq " + std::to_string(st.seq) + ")");
-            lines.push_back(Style::glyph_indent() + "  Cụm mạng: " + Style::bold(st.network_name) +
+            std::string net_name = !network_info_.network_name.empty() ? network_info_.network_name : st.network_name;
+            lines.push_back(Style::glyph_indent() + "  Cụm mạng: " + Style::bold(net_name) +
                            " · Bản ghi cục bộ: " + std::to_string(st.domain_count) + " domain");
             lines.push_back(Style::glyph_indent() + "  Database: " + Style::dim(st.data_file));
             if (!st.config_file.empty()) {
                 lines.push_back(Style::glyph_indent() + "  Config:   " + Style::dim(st.config_file));
             }
-            if (!st.psk_configured || !st.psk_key_file_found) {
-                lines.push_back(Style::glyph_indent() + "  " + Style::warning("Cảnh báo: Chưa kích hoạt mã hóa khóa PSK cho cụm mạng"));
+            bool psk_on = (st.psk_configured && st.psk_key_file_found) || network_info_.psk_enabled;
+            if (!psk_on) {
+                lines.push_back(Style::glyph_indent() + "  " + Style::warning("Cảnh báo: Chưa đặt khóa mạng PSK"));
             } else {
                 lines.push_back(Style::glyph_indent() + "  " + Style::success("Bảo mật: Mạng được bảo vệ bởi khóa PSK (AES-256-GCM)"));
             }
@@ -661,9 +664,9 @@ void TuiApp::handle_command(const std::string& cmd_line) {
         }
 
         lines.push_back(Style::primary(Style::glyph_bullet()) + "  " + Style::bold("Tổng quan Ldns") + " (node: thang-pc · a3f9e1)");
-        lines.push_back(Style::glyph_indent() + "  Phiên bản: 0.1.0 · Cổng discovery: 5390 · Cổng sync: 5391");
+        lines.push_back(Style::glyph_indent() + "  Cụm mạng: " + Style::bold(network_info_.network_name) + " · Phiên bản: 0.1.0 · Cổng discovery: 5390 · Cổng sync: 5391");
         if (!network_info_.psk_enabled) {
-            lines.push_back(Style::glyph_indent() + "  " + Style::warning("Cảnh báo: Chưa đặt khóa mạng PSK (/network key set để bật mã hóa)"));
+            lines.push_back(Style::glyph_indent() + "  " + Style::warning("Cảnh báo: Chưa đặt khóa mạng PSK"));
         } else {
             lines.push_back(Style::glyph_indent() + "  " + Style::success("Bảo mật: Mạng được bảo vệ bởi khóa PSK (" + network_info_.psk_cipher + ")"));
         }
@@ -1460,12 +1463,16 @@ void TuiApp::handle_command(const std::string& cmd_line) {
             iss >> action;
             if (arg == "set") {
                 network_info_.psk_enabled = true;
-                add_scrollback(Style::success(Style::glyph_bullet()) + "  Đã kích hoạt khóa mạng PSK thành công.");
-                add_scrollback(Style::glyph_indent() + "  Mọi gói UDP Discovery và TCP Sync hiện được mã hóa bằng AES-256-GCM.");
+                welcome_info_.psk_enabled = true;
+                add_scrollback(Style::success(Style::glyph_bullet() + "  Đã kích hoạt khóa mạng PSK thành công."));
+                add_scrollback(Style::success(Style::glyph_indent() + "  Mọi gói UDP Discovery và TCP Sync hiện được mã hóa bằng AES-256-GCM."));
+                redraw_full_view();
                 return;
             } else if (arg == "clear") {
                 network_info_.psk_enabled = false;
-                add_scrollback(Style::warning(Style::glyph_bullet()) + "  Đã xóa khóa mạng PSK. Cụm mạng chuyển về chế độ mở.");
+                welcome_info_.psk_enabled = false;
+                add_scrollback(Style::warning(Style::glyph_bullet() + "  Đã xóa khóa mạng PSK. Cụm mạng chuyển về chế độ mở."));
+                redraw_full_view();
                 return;
             }
         } else if (sub == "name") {
@@ -1475,8 +1482,9 @@ void TuiApp::handle_command(const std::string& cmd_line) {
             }
             network_info_.network_name = arg;
             welcome_info_.network_name = arg;
-            add_scrollback(Style::success(Style::glyph_bullet()) + "  Đã đổi tên cụm mạng LAN sang: \"" + arg + "\"");
+            add_scrollback(Style::success(Style::glyph_bullet() + "  Đã đổi tên cụm mạng LAN sang: \"" + arg + "\""));
             add_scrollback(Style::glyph_indent() + "  Đang tái phát hiện các node có cùng tên mạng...");
+            redraw_full_view();
             return;
         }
 
@@ -1554,10 +1562,12 @@ void TuiApp::handle_command(const std::string& cmd_line) {
                 items.push_back({"Địa chỉ LAN (Self)", DoctorStatus::Warning, "Không phát hiện card mạng LAN nào", "Kiểm tra kết nối Wi-Fi/Ethernet"});
             }
 
-            if (st.psk_configured && st.psk_key_file_found) {
-                items.push_back({"Bảo mật cụm mạng (PSK)", DoctorStatus::Pass, "Đã bật mã hóa AES-256-GCM cho cụm: " + st.network_name, ""});
+            bool psk_on = (st.psk_configured && st.psk_key_file_found) || network_info_.psk_enabled;
+            std::string net_name = !network_info_.network_name.empty() ? network_info_.network_name : st.network_name;
+            if (psk_on) {
+                items.push_back({"Bảo mật cụm mạng (PSK)", DoctorStatus::Pass, "Đã bật mã hóa AES-256-GCM cho cụm: " + net_name, ""});
             } else {
-                items.push_back({"Bảo mật cụm mạng (PSK)", DoctorStatus::Warning, "Chưa cấu hình khóa PSK cho cụm: " + st.network_name, "Dùng \"/network key set\" để kích hoạt"});
+                items.push_back({"Bảo mật cụm mạng (PSK)", DoctorStatus::Warning, "Chưa cấu hình khóa PSK cho cụm: " + net_name, "Dùng \"/network key set\" để kích hoạt"});
             }
 
             items.push_back({"Cổng DNS 53", DoctorStatus::Pass, "Sẵn sàng nhận truy vấn từ LocalZone và PeerResolver", ""});
@@ -1578,10 +1588,72 @@ void TuiApp::handle_command(const std::string& cmd_line) {
         return;
     }
 
+    if (cmd == "/firewall") {
+        std::string sub;
+        iss >> sub;
+        if (sub.empty() || sub == "status") {
+            auto st = os::Firewall::status();
+            std::vector<std::string> lines;
+            lines.push_back(Style::primary(Style::glyph_bullet()) + "  " + Style::bold("Trạng thái Tường lửa Hệ thống (LAN Firewall):"));
+            lines.push_back(Style::glyph_indent() + "  Công cụ phát hiện: " + Style::bold(st.backend_detected));
+
+            auto format_port_rule = [](const std::string& name, int port, const std::string& proto, bool allowed) {
+                std::string status_str = allowed 
+                    ? Style::success(Style::glyph_dot() + "  Đã cho phép (Allowed)")
+                    : Style::warning(Style::glyph_dot() + "  Chưa cấu hình (Not configured)");
+                return "    " + name + " (Cổng " + std::to_string(port) + " " + proto + "):  " + status_str;
+            };
+
+            lines.push_back(format_port_rule("DNS Server", 53, "UDP/TCP", st.has_dns_rule));
+            lines.push_back(format_port_rule("Discovery ", 5390, "UDP", st.has_discovery_rule));
+            lines.push_back(format_port_rule("Sync Peer ", 5391, "TCP", st.has_sync_rule));
+
+            lines.push_back("");
+            lines.push_back("  " + Style::dim("Gợi ý: Dùng \"/firewall add\" để tự động thêm quy tắc hoặc \"/firewall remove\" để gỡ bỏ."));
+            add_scrollback(lines);
+            return;
+        } else if (sub == "add") {
+            auto res = os::Firewall::add_rules();
+            if (!res) {
+                add_scrollback(Style::error("Lỗi cấu hình tường lửa: " + res.error().message));
+            } else {
+                add_scrollback(Style::success(Style::glyph_bullet() + "  Đã thêm các quy tắc tường lửa cho Ldns (cổng 53, 5390, 5391) thành công."));
+            }
+            return;
+        } else if (sub == "remove" || sub == "rm") {
+            auto res = os::Firewall::remove_rules();
+            if (!res) {
+                add_scrollback(Style::error("Lỗi gỡ bỏ quy tắc tường lửa: " + res.error().message));
+            } else {
+                add_scrollback(Style::warning(Style::glyph_bullet() + "  Đã gỡ bỏ các quy tắc tường lửa của Ldns."));
+            }
+            return;
+        } else {
+            add_scrollback(Style::dim("Cú pháp: /firewall status | /firewall add | /firewall remove"));
+            return;
+        }
+    }
+
     if (cmd == "/system") {
         std::string sub;
         iss >> sub;
-        if (sub == "setup") {
+        if (sub.empty() || sub == "status") {
+            std::vector<std::string> lines;
+            lines.push_back(Style::primary(Style::glyph_bullet()) + "  Trạng thái cấu hình DNS Hệ điều hành:");
+#if defined(_WIN32)
+            lines.push_back(Style::glyph_indent() + "  Nền tảng:    Windows (Get-DnsClientServerAddress)");
+            lines.push_back(Style::glyph_indent() + "  DNS hiện tại: 127.0.0.1 (Ldns Local Resolver)");
+            lines.push_back(Style::glyph_indent() + "  Trạng thái:   " + Style::success("Đang hoạt động"));
+#else
+            lines.push_back(Style::glyph_indent() + "  Nền tảng:    Linux (systemd-resolved / resolvectl)");
+            lines.push_back(Style::glyph_indent() + "  DNS hiện tại: 127.0.0.1 (Ldns Local Resolver)");
+            lines.push_back(Style::glyph_indent() + "  Trạng thái:   " + Style::success("Đang hoạt động"));
+#endif
+            lines.push_back(Style::glyph_indent() + "  Sao lưu DNS:  Bản ghi gốc được lưu an toàn trong SQLite");
+            lines.push_back("  " + Style::dim("Gợi ý: Dùng \"/system setup\" để kích hoạt hoặc \"/system restore\" để hoàn tác DNS gốc."));
+            add_scrollback(lines);
+            return;
+        } else if (sub == "setup") {
             // Trigger confirmation dialog
             active_dialog_ = std::make_unique<Dialog>(
                 "Đặt DNS hệ thống về 127.0.0.1?",
@@ -1598,6 +1670,9 @@ void TuiApp::handle_command(const std::string& cmd_line) {
             return;
         } else if (sub == "restore") {
             add_scrollback(Style::success(Style::glyph_bullet()) + "  Đã khôi phục DNS hệ thống về trạng thái ban đầu.");
+            return;
+        } else {
+            add_scrollback(Style::dim("Cú pháp: /system status | /system setup | /system restore"));
             return;
         }
     }

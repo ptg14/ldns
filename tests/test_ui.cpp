@@ -143,6 +143,10 @@ TEST_CASE("UI: SlashMenu filtering and navigation") {
     CHECK(menu.filtered_items().size() == 1);
     CHECK(menu.filtered_items()[0].name == "/doctor");
 
+    menu.set_query("/fire");
+    CHECK(menu.filtered_items().size() == 1);
+    CHECK(menu.filtered_items()[0].name == "/firewall");
+
     menu.set_query("/re");
     // Should match /resolve
     bool has_resolve = false;
@@ -150,6 +154,23 @@ TEST_CASE("UI: SlashMenu filtering and navigation") {
         if (item.name == "/resolve") has_resolve = true;
     }
     CHECK(has_resolve);
+
+    SUBCASE("Subcommand suggestions") {
+        menu.set_query("/firewall ");
+        CHECK(menu.filtered_items().size() == 3);
+        CHECK(menu.filtered_items()[0].name == "status");
+        CHECK(menu.filtered_items()[0].completion == "/firewall status");
+
+        menu.set_query("/firewall add");
+        CHECK(menu.filtered_items().size() == 1);
+        CHECK(menu.filtered_items()[0].name == "add");
+
+        menu.set_query("/network ");
+        CHECK(menu.filtered_items().size() == 3);
+
+        menu.set_query("/service ");
+        CHECK(menu.filtered_items().size() == 4);
+    }
 }
 
 TEST_CASE("UI: Dialog option selection") {
@@ -164,7 +185,9 @@ TEST_CASE("UI: Dialog option selection") {
     dlg.move_down();
     CHECK(dlg.selected_num() == 2);
 
-    dlg.select_num(1);
+    CHECK(dlg.select_num(1) == true);
+    CHECK(dlg.selected_num() == 1);
+    CHECK(dlg.select_num(9) == false);
     CHECK(dlg.selected_num() == 1);
 
     dlg.close();
@@ -235,6 +258,15 @@ TEST_CASE("UI: WelcomePanel responsive rendering at different widths") {
         CHECK(!lines.empty());
         for (const auto& l : lines) {
             CHECK(ldns::ui::CharWidth::display_width(l) <= 35);
+        }
+    }
+
+    SUBCASE("PSK enabled rendering") {
+        info.psk_enabled = true;
+        auto lines = ldns::ui::WelcomePanel::render(info, 80);
+        CHECK(!lines.empty());
+        for (const auto& l : lines) {
+            CHECK(ldns::ui::CharWidth::display_width(l) <= 80);
         }
     }
 }

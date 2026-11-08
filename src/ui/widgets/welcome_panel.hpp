@@ -12,6 +12,7 @@ struct WelcomeInfo {
     std::string ip_address = "127.0.0.1";
     std::string dns_port = ":53";
     bool dns_active = true;
+    bool psk_enabled = false;
 };
 
 class WelcomePanel {

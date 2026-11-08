@@ -24,6 +24,7 @@ SlashMenu::SlashMenu() {
         {"/conflicts", "/conflicts", "Xem các tên miền đang bị xung đột phiếu"},
         {"/logs", "/logs [--follow]", "Xem nhật ký truy vấn DNS thời gian thực"},
         {"/status", "/status", "Tổng quan bind, quyền, peer, an toàn mạng"},
+        {"/firewall", "/firewall [status|add|rm]", "Quản lý quy tắc tường lửa LAN cho Ldns"},
         {"/service", "/service status|install|start|stop", "Quản lý dịch vụ daemon nền hệ thống"},
         {"/network", "/network [name|key]", "Cấu hình tên mạng và khóa PSK"},
         {"/system", "/system setup|restore", "Đặt hoặc khôi phục DNS hệ thống"},
@@ -32,17 +33,100 @@ SlashMenu::SlashMenu() {
         {"/version", "/version", "Xem thông tin phiên bản Ldns"},
         {"/exit", "/exit", "Thoát khỏi chương trình"}
     };
+
+    subcommands_ = {
+        // /firewall
+        {"status", "/firewall status", "/firewall status", "Xem trạng thái các cổng tường lửa LAN (53, 5390, 5391)"},
+        {"add", "/firewall add", "/firewall add", "Tự động thêm quy tắc mở các cổng tường lửa cho Ldns"},
+        {"remove", "/firewall remove", "/firewall remove", "Gỡ bỏ các quy tắc tường lửa của Ldns"},
+
+        // /network
+        {"name", "/network name", "/network name <tên>", "Đổi tên cụm mạng LAN sang tên mới"},
+        {"key set", "/network key set", "/network key set", "Kích hoạt mã hóa khóa mạng PSK AES-256-GCM"},
+        {"key clear", "/network key clear", "/network key clear", "Xóa khóa mạng PSK, đưa cụm mạng về chế độ mở"},
+
+        // /service
+        {"status", "/service status", "/service status", "Xem trạng thái dịch vụ nền (LdnsService / ldns.service)"},
+        {"install", "/service install", "/service install", "Hộp thoại cài đặt dịch vụ tự khởi động cùng hệ thống"},
+        {"start", "/service start", "/service start", "Bắt đầu chạy dịch vụ daemon nền"},
+        {"stop", "/service stop", "/service stop", "Dừng dịch vụ daemon nền"},
+
+        // /system
+        {"status", "/system status", "/system status", "Xem trạng thái cấu hình DNS hệ điều hành và metadata"},
+        {"setup", "/system setup", "/system setup", "Hộp thoại cấu hình trỏ DNS máy tính về 127.0.0.1"},
+        {"restore", "/system restore", "/system restore", "Khôi phục DNS hệ thống về cấu hình gốc ban đầu"},
+
+        // /peer
+        {"add", "/peer add", "/peer add <ip:5391>", "Thêm kết nối thủ công tới peer LAN"},
+        {"rm", "/peer rm", "/peer rm <ip>", "Ngắt kết nối và gỡ bỏ peer thủ công"},
+        {"forget", "/peer forget", "/peer forget <node>", "Quên thông tin nhận diện node peer"},
+
+        // /upstream
+        {"list", "/upstream list", "/upstream list", "Xem danh sách DNS upstream và độ trễ RTT"},
+        {"add", "/upstream add", "/upstream add <ip>", "Thêm DNS upstream server mới"},
+        {"rm", "/upstream rm", "/upstream rm <ip>", "Gỡ bỏ DNS upstream server khỏi danh sách"},
+
+        // /logs
+        {"--follow", "/logs --follow", "/logs --follow", "Theo dõi trực tiếp luồng truy vấn DNS thời gian thực"},
+
+        // /resolve
+        {"--trace", "/resolve --trace", "/resolve <tên> --trace", "Phân giải tên miền kèm sơ đồ cây 3 bước"},
+
+        // /ls
+        {"--mine", "/ls --mine", "/ls --mine", "Chỉ hiển thị các domain do node này tạo"},
+        {"--all", "/ls --all", "/ls --all", "Hiển thị toàn bộ domain của tất cả các node trong LAN"},
+        {"--type A", "/ls --type A", "/ls --type A", "Lọc danh sách domain theo loại bản ghi A"},
+        {"--type AAAA", "/ls --type AAAA", "/ls --type AAAA", "Lọc danh sách domain theo loại bản ghi AAAA"},
+        {"--type CNAME", "/ls --type CNAME", "/ls --type CNAME", "Lọc danh sách domain theo loại bản ghi CNAME"},
+        {"--type TXT", "/ls --type TXT", "/ls --type TXT", "Lọc danh sách domain theo loại bản ghi TXT"},
+
+        // /conflicts
+        {"clear", "/conflicts clear", "/conflicts clear", "Xóa sạch các xung đột mẫu đang lưu"},
+
+        // /import
+        {"--force", "/import --force", "/import <file> --force", "Ghi đè domain khi phát hiện xung đột lúc import"},
+
+        // /export
+        {"--csv", "/export --csv", "/export --csv", "Xuất danh sách domain ra định dạng file CSV"}
+    };
+
     filtered_ = commands_;
 }
 
 void SlashMenu::set_query(std::string_view query) {
     filtered_.clear();
     std::string q(query);
-    for (const auto& cmd : commands_) {
-        if (q.empty() || q == "/" || cmd.name.find(q) != std::string::npos) {
-            filtered_.push_back(cmd);
+
+    // Case 1: No space in query -> top-level command search (e.g. "/", "/s", "/fire")
+    size_t first_space = q.find(' ');
+    if (first_space == std::string::npos) {
+        for (const auto& cmd : commands_) {
+            if (q.empty() || q == "/" || cmd.name.find(q) != std::string::npos) {
+                filtered_.push_back(cmd);
+            }
+        }
+        selected_index_ = 0;
+        return;
+    }
+
+    // Case 2: Query has space -> subcommand search!
+    std::string base_cmd = q.substr(0, first_space);
+    size_t sub_start = q.find_first_not_of(' ', first_space);
+    std::string sub_query = (sub_start != std::string::npos) ? q.substr(sub_start) : "";
+
+    for (const auto& sub : subcommands_) {
+        if (sub.completion.rfind(base_cmd, 0) == 0) {
+            if (sub_query.empty()) {
+                filtered_.push_back(sub);
+            } else {
+                if (sub.name.find(sub_query) != std::string::npos ||
+                    sub.completion.find(q) != std::string::npos) {
+                    filtered_.push_back(sub);
+                }
+            }
         }
     }
+
     selected_index_ = 0;
 }
 
@@ -63,57 +147,46 @@ void SlashMenu::move_selection_down() {
 }
 
 const CommandDesc* SlashMenu::selected_command() const {
-    if (selected_index_ < filtered_.size()) {
-        return &filtered_[selected_index_];
-    }
-    return nullptr;
+    if (filtered_.empty()) return nullptr;
+    return &filtered_[selected_index_];
 }
 
-std::vector<std::string> SlashMenu::render(size_t term_width) const {
-    if (filtered_.empty()) {
-        return {};
-    }
-
-    size_t box_width = (term_width < 20) ? 20 : term_width;
+std::vector<std::string> SlashMenu::render(size_t box_width) const {
+    if (filtered_.empty()) return {};
 
     std::vector<std::string> lines;
-    // Show maximum 7 items at a time
-    size_t max_visible = 7;
-    size_t start = 0;
-    if (selected_index_ >= max_visible) {
-        start = selected_index_ - max_visible + 1;
+    // Header
+    lines.push_back("  " + Style::dim("Lệnh khả dụng:") + " " +
+                    Style::accent(std::to_string(filtered_.size())) +
+                    Style::dim(" gợi ý  (↑/↓ chọn · Tab hoàn tất)"));
+    lines.push_back("");
+
+    // Limit to max 6 visible items
+    size_t max_visible = 6;
+    size_t start_idx = 0;
+    if (filtered_.size() > max_visible && selected_index_ >= max_visible) {
+        start_idx = selected_index_ - max_visible + 1;
     }
-    size_t count = std::min(filtered_.size() - start, max_visible);
+    size_t end_idx = std::min(start_idx + max_visible, filtered_.size());
 
-    for (size_t i = 0; i < count; ++i) {
-        size_t idx = start + i;
-        bool is_selected = (idx == selected_index_);
-        const auto& cmd = filtered_[idx];
+    for (size_t i = start_idx; i < end_idx; ++i) {
+        const auto& item = filtered_[i];
+        bool is_selected = (i == selected_index_);
 
-        std::string line;
-        if (is_selected) {
-            line += Style::accent(Style::glyph_cursor()) + " ";
-            line += Style::bold(cmd.name);
-        } else {
-            line += "   ";
-            line += cmd.name;
+        std::string prefix = is_selected ? (Style::accent("  ❯ ") + Style::bold(item.name))
+                                         : ("    " + Style::bold(item.name));
+
+        // Pad name to 14 chars
+        if (item.name.length() < 14) {
+            prefix.append(14 - item.name.length(), ' ');
         }
 
-        // Align description column
-        size_t name_len = cmd.name.size() + 3;
-        if (name_len < 15) {
-            line.append(15 - name_len, ' ');
-        } else {
-            line += " ";
-        }
+        std::string desc = "  " + Style::dim(item.description);
+        lines.push_back(prefix + desc);
+    }
 
-        if (is_selected) {
-            line += cmd.description;
-        } else {
-            line += Style::dim(cmd.description);
-        }
-
-        lines.push_back(line);
+    if (filtered_.size() > max_visible) {
+        lines.push_back("  " + Style::dim("... (" + std::to_string(filtered_.size() - max_visible) + " lệnh khác)"));
     }
 
     return Box::wrap_box(lines, box_width);

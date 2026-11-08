@@ -16,7 +16,7 @@ public:
 
     void move_up();
     void move_down();
-    void select_num(int num);
+    bool select_num(int num);
 
     int selected_num() const;
     bool is_active() const { return active_; }
