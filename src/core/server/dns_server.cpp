@@ -422,25 +422,45 @@ Result<void> DnsServer::start() {
         }
         const udp::endpoint udp_endpoint = to_udp_endpoint(address, configured_port);
 
-        auto udp_listener = std::make_shared<UdpListener>(io_, *this, udp_endpoint);
-        if (auto status = udp_listener->open(); !status) {
-            udp_listener->stop();
-            stop();
-            return Error{status.error().code, spec + ": " + status.error().message};
+        std::shared_ptr<UdpListener> udp_listener;
+        std::shared_ptr<TcpListener> tcp_listener;
+        bool bound_ok = false;
+        const int max_retries = configured_port == 0 ? 50 : 1;
+
+        for (int attempt = 0; attempt < max_retries; ++attempt) {
+            udp_listener = std::make_shared<UdpListener>(io_, *this, udp_endpoint);
+            if (auto status = udp_listener->open(); !status) {
+                udp_listener->stop();
+                if (attempt + 1 == max_retries) {
+                    stop();
+                    return Error{status.error().code, spec + ": " + status.error().message};
+                }
+                continue;
+            }
+
+            // Port 0 asks the OS for an ephemeral port; TCP must use the same one,
+            // otherwise UDP and TCP would listen on different ports.
+            const std::uint16_t port =
+                configured_port != 0 ? configured_port : udp_listener->local_endpoint().port();
+
+            tcp_listener =
+                std::make_shared<TcpListener>(io_, *this, to_tcp_endpoint(address, port));
+            if (auto status = tcp_listener->open(); !status) {
+                tcp_listener->stop();
+                udp_listener->stop();
+                if (attempt + 1 == max_retries) {
+                    stop();
+                    return Error{status.error().code, spec + ": " + status.error().message};
+                }
+                continue;
+            }
+            bound_ok = true;
+            break;
         }
 
-        // Port 0 asks the OS for an ephemeral port; TCP must use the same one,
-        // otherwise UDP and TCP would listen on different ports.
-        const std::uint16_t port =
-            configured_port != 0 ? configured_port : udp_listener->local_endpoint().port();
-
-        auto tcp_listener =
-            std::make_shared<TcpListener>(io_, *this, to_tcp_endpoint(address, port));
-        if (auto status = tcp_listener->open(); !status) {
-            tcp_listener->stop();
-            udp_listener->stop();
+        if (!bound_ok) {
             stop();
-            return Error{status.error().code, spec + ": " + status.error().message};
+            return Error{318, spec + ": failed to bind both UDP and TCP"};
         }
 
         udp_.push_back(std::move(udp_listener));

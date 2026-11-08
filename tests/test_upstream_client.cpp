@@ -23,13 +23,36 @@ class MockDnsServer {
 public:
     explicit MockDnsServer(bool respond_tc = false)
         : io_(), udp_socket_(io_), tcp_acceptor_(io_), respond_tc_(respond_tc) {
-        udp_socket_.open(udp::v4());
-        udp_socket_.bind(udp::endpoint(asio::ip::make_address_v4("127.0.0.1"), 0));
-        port_ = udp_socket_.local_endpoint().port();
+        for (int retry = 0; retry < 50; ++retry) {
+            asio::error_code ec;
+            udp_socket_.open(udp::v4(), ec);
+            if (ec) continue;
+            udp_socket_.bind(udp::endpoint(asio::ip::make_address_v4("127.0.0.1"), 0), ec);
+            if (ec) {
+                udp_socket_.close(ec);
+                continue;
+            }
+            port_ = udp_socket_.local_endpoint().port();
 
-        tcp_acceptor_.open(tcp::v4());
-        tcp_acceptor_.bind(tcp::endpoint(asio::ip::make_address_v4("127.0.0.1"), port_));
-        tcp_acceptor_.listen();
+            tcp_acceptor_.open(tcp::v4(), ec);
+            if (ec) {
+                udp_socket_.close(ec);
+                continue;
+            }
+            tcp_acceptor_.bind(tcp::endpoint(asio::ip::make_address_v4("127.0.0.1"), port_), ec);
+            if (ec) {
+                tcp_acceptor_.close(ec);
+                udp_socket_.close(ec);
+                continue;
+            }
+            tcp_acceptor_.listen(asio::socket_base::max_listen_connections, ec);
+            if (ec) {
+                tcp_acceptor_.close(ec);
+                udp_socket_.close(ec);
+                continue;
+            }
+            break;
+        }
 
         start_udp();
         start_tcp();

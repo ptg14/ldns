@@ -6,6 +6,7 @@
 #include "os/system_dns_manager.hpp"
 
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <filesystem>
@@ -46,9 +47,33 @@ void print_entries_human(const std::vector<domain::DomainEntry>& entries) {
         std::cout << "no domains\n";
         return;
     }
+
+    std::size_t max_name = 4;  // "NAME"
+    std::size_t max_type = 4;  // "TYPE"
+    std::size_t max_ttl  = 3;  // "TTL"
+    std::size_t max_kind = 4;  // "KIND"
+
     for (const auto& entry : entries) {
-        std::cout << entry.name << "  " << entry.type << "  " << entry.ttl << "s  "
-                  << entry.target_kind << "  ";
+        max_name = (std::max)(max_name, entry.name.size());
+        max_type = (std::max)(max_type, entry.type.size());
+        std::string ttl_str = std::to_string(entry.ttl) + "s";
+        max_ttl  = (std::max)(max_ttl, ttl_str.size());
+        max_kind = (std::max)(max_kind, entry.target_kind.size());
+    }
+
+    std::cout << std::left << std::setw(static_cast<int>(max_name) + 2) << "NAME"
+              << std::left << std::setw(static_cast<int>(max_type) + 2) << "TYPE"
+              << std::left << std::setw(static_cast<int>(max_ttl) + 2) << "TTL"
+              << std::left << std::setw(static_cast<int>(max_kind) + 2) << "KIND"
+              << "TARGETS\n";
+
+    for (const auto& entry : entries) {
+        const std::string ttl_str = std::to_string(entry.ttl) + "s";
+        std::cout << std::left << std::setw(static_cast<int>(max_name) + 2) << entry.name
+                  << std::left << std::setw(static_cast<int>(max_type) + 2) << entry.type
+                  << std::left << std::setw(static_cast<int>(max_ttl) + 2) << ttl_str
+                  << std::left << std::setw(static_cast<int>(max_kind) + 2) << entry.target_kind;
+
         for (std::size_t i = 0; i < entry.targets.size(); ++i) {
             if (i != 0) std::cout << ", ";
             std::cout << entry.targets[i];
