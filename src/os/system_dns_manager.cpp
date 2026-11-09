@@ -123,7 +123,7 @@ Result<void> SystemDnsManager::restore() {
     if (std::system("which resolvectl >/dev/null 2>&1") == 0) {
         std::string cmd = "for iface in $(ip -br link show | awk '$2==\"UP\" {print $1}'); do "
                           "resolvectl revert $iface 2>/dev/null; done";
-        (void)std::system(cmd.c_str());
+        [[maybe_unused]] auto r_cmd = std::system(cmd.c_str());
     }
 
     // Check backup file

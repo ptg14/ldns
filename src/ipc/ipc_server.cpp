@@ -51,6 +51,11 @@ void IpcServer::stop() {
     running_ = false;
 
 #ifdef _WIN32
+    // Cancel any blocking synchronous I/O (like ConnectNamedPipe) on the listener thread
+    if (listener_thread_.joinable()) {
+        CancelSynchronousIo(reinterpret_cast<HANDLE>(listener_thread_.native_handle()));
+    }
+
     // Connect a dummy client to unblock ConnectNamedPipe
     HANDLE dummy = CreateFileA(endpoint_.c_str(), GENERIC_READ | GENERIC_WRITE,
                                0, nullptr, OPEN_EXISTING, 0, nullptr);
@@ -402,7 +407,7 @@ void IpcServer::run_listener_thread() {
                     }
 
                     std::string resp_str = serialize_response(resp) + "\n";
-                    (void)::write(client_fd, resp_str.data(), resp_str.size());
+                    auto written = ::write(client_fd, resp_str.data(), resp_str.size()); (void)written;
                 }
                 ::close(client_fd);
             }

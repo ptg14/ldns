@@ -10,6 +10,14 @@
 #include <chrono>
 #include <filesystem>
 #include <thread>
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
 
 using namespace ldns;
 using namespace ldns::ipc;
@@ -44,9 +52,9 @@ std::string make_test_endpoint() {
     static std::atomic<int> counter{0};
     int id = ++counter;
 #ifdef _WIN32
-    return "\\\\.\\pipe\\ldns-test-pipe-" + std::to_string(::rand()) + "-" + std::to_string(id);
+    return "\\\\.\\pipe\\ldns-test-pipe-" + std::to_string(::GetCurrentProcessId()) + "-" + std::to_string(id);
 #else
-    return "/tmp/ldns-test-sock-" + std::to_string(::rand()) + "-" + std::to_string(id) + ".sock";
+    return "/tmp/ldns-test-sock-" + std::to_string(::getpid()) + "-" + std::to_string(id) + ".sock";
 #endif
 }
 

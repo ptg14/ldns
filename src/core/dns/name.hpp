@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <span>
 #include <string>
 #include <string_view>
@@ -62,7 +63,16 @@ public:
 
     friend bool operator==(const Name& a, const Name& b) noexcept { return a.wire_ == b.wire_; }
     friend bool operator!=(const Name& a, const Name& b) noexcept { return !(a == b); }
-    friend bool operator<(const Name& a, const Name& b) noexcept { return a.wire_ < b.wire_; }
+    friend bool operator<(const Name& a, const Name& b) noexcept {
+        const auto len_a = a.wire_.size();
+        const auto len_b = b.wire_.size();
+        const auto min_len = len_a < len_b ? len_a : len_b;
+        if (min_len > 0) {
+            int cmp = std::memcmp(a.wire_.data(), b.wire_.data(), min_len);
+            if (cmp != 0) return cmp < 0;
+        }
+        return len_a < len_b;
+    }
 
 private:
     explicit Name(std::vector<std::uint8_t> wire) : wire_(std::move(wire)) {}

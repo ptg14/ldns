@@ -89,9 +89,11 @@ std::vector<std::uint8_t> hkdf_expand(std::span<const std::uint8_t> prk,
         std::vector<std::uint8_t> step_input;
         step_input.reserve(t_len + info.size() + 1);
         if (t_len > 0) {
-            step_input.insert(step_input.end(), t.begin(), t.begin() + static_cast<std::ptrdiff_t>(t_len));
+            step_input.insert(step_input.end(), t.data(), t.data() + t_len);
         }
-        step_input.insert(step_input.end(), info.begin(), info.end());
+        if (!info.empty()) {
+            step_input.insert(step_input.end(), info.data(), info.data() + info.size());
+        }
         step_input.push_back(static_cast<std::uint8_t>(i));
 
         t = hmac_sha256(prk, step_input);

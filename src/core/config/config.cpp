@@ -444,7 +444,7 @@ void Config::apply_environment() {
         const std::string value = getenv_string(env);
         if (value.empty()) return;
         try {
-            const auto parsed = std::stoul(value);
+            const auto parsed = std::stoull(value);
             if (parsed > 0 && parsed <= 0xFFFFFFFFull) target = static_cast<std::uint32_t>(parsed);
         } catch (const std::exception&) {
             // Invalid environment values are ignored in favour of the file.
@@ -454,7 +454,7 @@ void Config::apply_environment() {
         const std::string value = getenv_string(env);
         if (value.empty()) return;
         try {
-            const auto parsed = std::stoul(value);
+            const auto parsed = std::stoull(value);
             if (parsed > 0 && parsed <= 65535) target = static_cast<std::uint16_t>(parsed);
         } catch (const std::exception&) {
         }

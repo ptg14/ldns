@@ -230,8 +230,8 @@ Result<void> ServiceManager::install(const std::string& binary_path) {
     file << unit_content;
     file.close();
 
-    (void)std::system("systemctl daemon-reload >/dev/null 2>&1");
-    (void)std::system("systemctl enable ldns >/dev/null 2>&1");
+    [[maybe_unused]] auto r_dr1 = std::system("systemctl daemon-reload >/dev/null 2>&1");
+    [[maybe_unused]] auto r_en = std::system("systemctl enable ldns >/dev/null 2>&1");
 #endif
     return {};
 }
@@ -262,10 +262,10 @@ Result<void> ServiceManager::uninstall() {
     CloseServiceHandle(svc);
     CloseServiceHandle(scm);
 #else
-    (void)std::system("systemctl stop ldns >/dev/null 2>&1");
-    (void)std::system("systemctl disable ldns >/dev/null 2>&1");
+    [[maybe_unused]] auto r_st = std::system("systemctl stop ldns >/dev/null 2>&1");
+    [[maybe_unused]] auto r_dis = std::system("systemctl disable ldns >/dev/null 2>&1");
     ::unlink("/etc/systemd/system/ldns.service");
-    (void)std::system("systemctl daemon-reload >/dev/null 2>&1");
+    [[maybe_unused]] auto r_dr1 = std::system("systemctl daemon-reload >/dev/null 2>&1");
 #endif
     return {};
 }

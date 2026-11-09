@@ -23,11 +23,13 @@ export VCPKG_ROOT
 
 configure() {
     local sanitize=OFF
+    local build_type=Debug
     [[ "${PRESET}" == *asan* ]] && sanitize=ON
+    [[ "${PRESET}" == *release* ]] && build_type=Release
     cmake -S "${SRC}" -B "${BUILD_DIR}" \
         -DCMAKE_TOOLCHAIN_FILE="${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" \
         -DVCPKG_TARGET_TRIPLET=x64-linux \
-        -DCMAKE_BUILD_TYPE=Debug \
+        -DCMAKE_BUILD_TYPE="${build_type}" \
         -DLDNS_SANITIZE="${sanitize}" \
         -DLDNS_BUILD_TESTS=ON \
         -G Ninja
