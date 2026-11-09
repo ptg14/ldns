@@ -215,7 +215,7 @@ Result<void> ServiceManager::install(const std::string& binary_path) {
         "After=network.target\n\n"
         "[Service]\n"
         "Type=simple\n"
-        "ExecStart=" + bin + " daemon --foreground\n"
+        "ExecStart=\"" + bin + "\" daemon --foreground\n"
         "Restart=always\n"
         "RestartSec=3\n"
         "AmbientCapabilities=CAP_NET_BIND_SERVICE\n"

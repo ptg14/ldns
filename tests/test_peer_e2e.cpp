@@ -162,11 +162,17 @@ void wait_for_connection(TestNode& n1, TestNode& n2, int max_ms = 4000) {
     auto start = std::chrono::steady_clock::now();
     while (std::chrono::duration_cast<std::chrono::milliseconds>(
                std::chrono::steady_clock::now() - start).count() < max_ms) {
-        if (n1.pm->online_peer_count() >= 1 && n2.pm->online_peer_count() >= 1) return;
+        auto p1 = n1.pm->get_peer(n2.id);
+        auto p2 = n2.pm->get_peer(n1.id);
+        if (p1 && p1->is_online && p2 && p2->is_online) return;
         std::this_thread::sleep_for(std::chrono::milliseconds(25));
     }
-    REQUIRE(n1.pm->online_peer_count() >= 1);
-    REQUIRE(n2.pm->online_peer_count() >= 1);
+    auto p1 = n1.pm->get_peer(n2.id);
+    auto p2 = n2.pm->get_peer(n1.id);
+    REQUIRE(p1.has_value());
+    REQUIRE(p1->is_online);
+    REQUIRE(p2.has_value());
+    REQUIRE(p2->is_online);
 }
 
 void wait_for_claim(TestNode& node, const std::string& name_str, std::uint16_t type, int max_ms = 4000) {
@@ -301,7 +307,7 @@ TEST_CASE("E2E Scenario 4: Hedging query when first peer delays") {
     // Intentionally inject delay on Node A's response handler
     nodeA.pm->set_resolve_handlers(
         [&nodeA](auto s, const auto& req) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
             nodeA.peer_resolver->handle_resolve_request(s, req);
         },
         [&nodeA](auto s, const auto& resp) {
@@ -332,6 +338,6 @@ TEST_CASE("E2E Scenario 4: Hedging query when first peer delays") {
     REQUIRE(res.response.answers.size() == 1);
     CHECK(res.response.answers[0].rdata == dns::parse_ipv4("10.9.9.9").value());
 
-    // Hedging kicked in around ~60ms and Node B answered promptly, well before Node A's 300ms delay!
-    CHECK(duration_ms < 280);
+    // Hedging kicked in around ~60ms and Node B answered promptly, well before Node A's 500ms delay!
+    CHECK(duration_ms < 400);
 }

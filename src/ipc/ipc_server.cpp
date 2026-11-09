@@ -359,7 +359,11 @@ void IpcServer::run_listener_thread() {
     addr.sun_family = AF_UNIX;
     std::strncpy(addr.sun_path, endpoint_.c_str(), sizeof(addr.sun_path) - 1);
 
-    if (::bind(server_fd_, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) < 0) {
+    mode_t old_mask = ::umask(0077);
+    int bind_res = ::bind(server_fd_, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr));
+    ::umask(old_mask);
+
+    if (bind_res < 0) {
         ::close(server_fd_);
         server_fd_ = -1;
         return;
